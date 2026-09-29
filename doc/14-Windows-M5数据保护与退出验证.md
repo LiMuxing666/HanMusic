@@ -67,7 +67,27 @@
 
 新增覆盖包含 8 项 Windows 锁测试、11 项退出协调测试、2 项实际应用框架退出测试、2 项启动/确认 UI 测试，以及普通滚轮/回滚在基准窗口和 200% 字号下的 2 项交互测试；持久化测试新增失败返回值与关闭后不重复保存的断言。
 
-代码验证已完成，正常入口预览包将在本轮代码提交后从干净源码构建，并补记实际包结果。预览包必须从 `lib/main.dart` 重建，不能交付 Profile 或音频诊断入口。新验证命令提供 `-CheckDataDirectoryLock`，检查真实应用进程运行时无法获取同一锁，精确终止测试进程后可重新获取；此强制终止仍不等于正常关窗验收。
+正常入口 Release 在系统 Windows PowerShell 5.1 中构建、打包并验证，构建日志报告 155.1 秒。包使用源码提交 `b70426aaca7f2b71a532f139c25e576903c484b6`，清单记录 `gitDirty=false`、入口 `lib/main.dart`、版本 `0.1.0-dev.6+6`、`publicReleaseReady=false`；后续提交仅补本文与环境文档的验证结果，不改变包内代码。
+
+| 产物 / 检查 | 实际结果 |
+| --- | --- |
+| ZIP | `D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-dev.6-M5.zip` |
+| 大小 / 文件数 | 20,474,450 字节；33 文件，其中清单覆盖 32 文件、49,011,536 字节，清单自身由 ZIP 哈希覆盖 |
+| ZIP SHA-256 | `61ee79844a8a35d35989bea2056d90735119cd80f602f3ef6d8ebed6da88dee2` |
+| 完整性 | ZIP sidecar、逐文件大小/SHA-256、路径与无预置 UserData 检查全部通过 |
+| 启动器 | 在 D 盘独立中文/空格目录解压，经 `Start-HanMusic.cmd` 调用系统 PowerShell；默认相邻 UserData 与 online 目录创建成功 |
+| 进程观察 | 8 秒采样期间保持存活且 Responding，含后续检查的记录耗时 9,290 ms；启动器退出 0 |
+| 实际持锁 | 应用运行时对 `.hanmusic.lock` 的同一区间加锁失败，Win32 错误为 33 |
+| 实际释放 | 精确终止本次应用后，第一次尝试即重新取得锁，检查耗时 35 ms；测试应用与 helper 均清理成功 |
+
+复现命令如下；完整证据为 `package-dev6.txt`、`verify-dev6.txt` 和 `package-verification-dev6.json`。验证脚本退出 0，报告 `passed=true`、五项检查均通过、`error=null`。
+
+```powershell
+. 'D:\dev\setup\Enter-HanMusic.ps1'
+& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File 'D:\project\HanMusic\tool\verify_windows_preview.ps1' -Archive 'D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-dev.6-M5.zip' -CheckDataDirectoryLock
+```
+
+锁验证只证明正常入口真实持锁和进程终止后的 OS 释放，不等于第二窗口提示、正常关窗或真实设备已验收。脚本没有操作原生关闭按钮，报告中的 `normalCloseTested`、`guiInteractionTested` 与 `cleanMachineTested` 均为 false。
 
 ## 5. 剩余门槛
 
