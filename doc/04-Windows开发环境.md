@@ -130,7 +130,9 @@ flutter run -d windows
 & 'D:\dev\setup\Verify-HanMusic.ps1'
 ```
 
-构建产物位于 `D:\project\HanMusic\build\windows\x64\runner\Release`。运行或分发时需保留整个目录中的 DLL 和 `data`，不能只拷贝 EXE。当前已实现 M2 本地曲库、队列和持久化核心；最新音乐功能与验收边界见 [M2 验证记录](./07-Windows-M2验证记录.md)，后端历史验证见 [M1 验证记录](./06-Windows-M1验证记录.md)。使用 `-t tool/...` 构建诊断入口会覆盖同一个输出目录，交付前必须重新构建默认 `lib/main.dart`。
+构建产物位于 `D:\project\HanMusic\build\windows\x64\runner\Release`。运行或分发时需保留整个目录中的 DLL 和 `data`，不能只拷贝 EXE。当前已实现 M1–M4 核心；最新网络能力与验收边界见 [M4 验证记录](./10-Windows-M4验证记录.md)，后端历史验证见 [M1 验证记录](./06-Windows-M1验证记录.md)。使用 `-t tool/...` 构建诊断入口会覆盖同一个输出目录，交付前必须重新构建默认 `lib/main.dart`。
+
+M4 网络源配置和备份位于 `D:\dev\data\HanMusic\online`；队列仅保存在线歌曲稳定 ID，临时流地址不写入状态文件。诊断服务与探针数据位于 `D:\dev\tmp\hanmusic-m4-probe`，验收记录归档至 `D:\dev\setup\verification\m4`。M4 无新增 SDK 或第三方依赖，Gradle、Pub、IDE 配置仍沿用上述 D 盘设置。
 
 模板基线验证摘要见 `D:\dev\setup\verification\result.json`，启动检查见 `launch.json`，成功构建日志见 `build-windows-ascii-path.txt`。此前中文路径失败的日志保留为 `build-windows.txt`。这些历史记录不替代当前音乐业务验证。
 

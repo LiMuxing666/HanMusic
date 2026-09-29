@@ -26,23 +26,31 @@ class AppSnapshot {
   final double volume;
   final bool skipOnError;
 
-  Map<String, Object?> toJson() => {
-    'schemaVersion': 1,
-    'songs': songs.map((song) => song.toJson()).toList(),
-    'queue': queue.map((song) => song.toJson()).toList(),
-    'currentId': currentId,
-    'positionMs': position.inMilliseconds,
-    'mode': mode.name,
-    'volume': volume,
-    'skipOnError': skipOnError,
-  };
+  Map<String, Object?> toJson() {
+    final result = <String, Object?>{
+      'schemaVersion': 2,
+      'songs': songs.map((song) => song.toJson()).toList(),
+      'queue': queue.map((song) => song.toJson()).toList(),
+      'currentId': currentId,
+      'positionMs': position.inMilliseconds,
+      'mode': mode.name,
+      'volume': volume,
+      'skipOnError': skipOnError,
+    };
+    // Validate before writing so stream URLs or online library entries cannot
+    // accidentally enter a state file through an in-memory constructor.
+    AppSnapshot.fromJson(result);
+    return result;
+  }
 
   factory AppSnapshot.fromJson(Map<String, dynamic> json) {
     final version = json['schemaVersion'];
-    if (version is int && version > 1) {
+    if (version is int && version > 2) {
       throw const UnsupportedStateVersion();
     }
-    if (version != 1) throw const FormatException('Invalid schema version.');
+    if (version is! int || (version != 1 && version != 2)) {
+      throw const FormatException('Invalid schema version.');
+    }
     List<Song> readSongs(String key) {
       final data = json[key];
       if (data is! List) throw FormatException('Invalid $key.');
@@ -52,8 +60,15 @@ class AppSnapshot {
           throw FormatException('Invalid $key entry.');
         }
         final song = Song.fromJson(item);
-        // M2 only restores local sources. Do not pass arbitrary stored schemes
-        // to the native decoder or treat a remote URI as a Windows path.
+        if (song.isOnline) {
+          if (version != 2 || key != 'queue') {
+            throw const FormatException(
+              'Online songs belong only in a version-2 queue.',
+            );
+          }
+          unique[song.id] = song;
+          continue;
+        }
         if (song.uri.scheme != 'file' || !song.uri.path.startsWith('/')) {
           throw const FormatException('Only local file URIs are supported.');
         }

@@ -8,6 +8,7 @@ import '../../data/repositories/local_song_picker.dart';
 import '../../services/library_service.dart';
 import '../../services/player_service.dart';
 import '../../services/timer_service.dart';
+import '../../services/online_music_service.dart';
 
 class PlayerController extends GetxController with WidgetsBindingObserver {
   PlayerController({
@@ -16,6 +17,7 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
     required SongPicker picker,
     LibraryService? library,
     LibraryPicker? libraryPicker,
+    this.online,
   }) : _player = player,
        _timer = timer,
        _picker = picker,
@@ -27,6 +29,16 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
   final SongPicker _picker;
   final LibraryService? _library;
   final LibraryPicker _libraryPicker;
+  final OnlineMusicService? online;
+
+  String sourceLabel(Song song) {
+    if (!song.isOnline) return '本地文件';
+    for (final source in online?.sources ?? []) {
+      if (source.id == song.sourceId) return source.name;
+    }
+    return '在线音乐';
+  }
+
   final isImporting = false.obs;
   final isRefreshing = false.obs;
   final searchQuery = ''.obs;
@@ -138,6 +150,13 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
     final playable = visibleSongs.where((item) => !item.isMissing).toList();
     final index = playable.indexWhere((item) => item.id == song.id);
     if (index >= 0) await _player.playQueue(playable, startIndex: index);
+  }
+
+  Future<void> playOnlineSong(Song song) async {
+    if (_closed || online == null) return;
+    final results = online!.results.toList();
+    final index = results.indexWhere((item) => item.id == song.id);
+    if (index >= 0) await _player.playQueue(results, startIndex: index);
   }
 
   Future<void> removeFromLibrary(Song song) async {

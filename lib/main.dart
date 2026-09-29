@@ -11,11 +11,14 @@ import 'app/core/theme/app_theme.dart';
 import 'app/data/models/song.dart';
 import 'app/data/repositories/app_state_store.dart';
 import 'app/data/repositories/local_library_repository.dart';
+import 'app/data/repositories/online_music_repository.dart';
+import 'app/data/repositories/online_source_store.dart';
 import 'app/data/sources/just_audio_backend.dart';
 import 'app/data/sources/windows_power_events.dart';
 import 'app/routes/app_pages.dart';
 import 'app/services/app_persistence_service.dart';
 import 'app/services/library_service.dart';
+import 'app/services/online_music_service.dart';
 import 'app/services/player_service.dart';
 import 'app/services/sleep_timer_coordinator.dart';
 import 'app/services/timer_service.dart';
@@ -39,10 +42,25 @@ Future<void> main() async {
   );
   library.replaceAll(snapshot.songs);
   await library.refreshMissing();
-  final player = Get.put(PlayerService(JustAudioBackend()), permanent: true);
+  final online = OnlineMusicService(
+    repository: OnlineMusicRepository(),
+    store: FileOnlineSourceStore(
+      Directory(path.join(dataDirectory.path, 'online')),
+    ),
+  );
+  await online.initialize();
+  Get.put(online, permanent: true);
+  final player = Get.put(
+    PlayerService(JustAudioBackend(), resolver: online.resolveForPlayback),
+    permanent: true,
+  );
   final indexed = {for (final song in library.songs) song.id: song};
   final restoredQueue = <Song>[];
   for (final song in snapshot.queue) {
+    if (song.isOnline) {
+      restoredQueue.add(song);
+      continue;
+    }
     var restored = indexed[song.id];
     if (restored == null) {
       var missing = true;
@@ -74,7 +92,10 @@ Future<void> main() async {
     permanent: true,
   );
   persistence.start();
-  final timer = Get.put(TimerService(onExpired: player.pause), permanent: true);
+  final timer = Get.put(
+    TimerService(onExpired: player.pauseForSleepTimer),
+    permanent: true,
+  );
   Get.put(SleepTimerCoordinator(player: player, timer: timer), permanent: true);
   runApp(const HanMusicApp());
 }
@@ -110,6 +131,7 @@ class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
     await Get.find<PlayerService>().pause();
     await Get.find<AppPersistenceService>().close();
     await Get.find<PlayerService>().shutdown();
+    await Get.find<OnlineMusicService>().close();
     Get.find<LibraryService>().onClose();
   }
 

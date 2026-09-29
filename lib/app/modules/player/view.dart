@@ -5,6 +5,8 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import 'controller.dart';
+import '../online/controller.dart';
+import '../online/view.dart';
 import '../../data/models/song.dart';
 import '../../data/models/play_mode.dart';
 import '../../data/models/sleep_timer_mode.dart';
@@ -343,18 +345,22 @@ class _SongCard extends StatelessWidget {
               )
             else ...[
               Tooltip(
-                message: song.path,
+                message: song.isOnline
+                    ? controller.sourceLabel(song)
+                    : song.path,
                 child: Row(
                   children: [
-                    const Icon(
-                      Icons.audio_file_outlined,
+                    Icon(
+                      song.isOnline
+                          ? Icons.cloud_outlined
+                          : Icons.audio_file_outlined,
                       size: 17,
                       color: _muted,
                     ),
                     const SizedBox(width: 7),
                     Expanded(
                       child: Text(
-                        song.fileName,
+                        song.isOnline ? song.artist ?? '未知歌手' : song.fileName,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(color: _muted),
@@ -368,7 +374,7 @@ class _SongCard extends StatelessWidget {
                 spacing: 10,
                 runSpacing: 6,
                 children: [
-                  _DetailLabel(text: '本地文件'),
+                  _DetailLabel(text: controller.sourceLabel(song)),
                   _DetailLabel(
                     text: song.extension.replaceFirst('.', '').toUpperCase(),
                   ),
@@ -565,7 +571,7 @@ class _PlaybackCard extends StatelessWidget {
         return Column(
           children: [
             _ProgressSlider(
-              key: ValueKey(song?.path),
+              key: ValueKey(song?.id),
               position: position,
               duration: duration,
               enabled: enabled && duration > Duration.zero,

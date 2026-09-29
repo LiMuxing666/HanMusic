@@ -136,7 +136,7 @@ void main() {
     await store.save(AppSnapshot(songs: [song]));
     await store.save(AppSnapshot(songs: [song]));
     final primary = File('${directory.path}/state.json');
-    const futureData = '{"schemaVersion":99,"unrecognizedUserData":"keep"}';
+    const futureData = '{"schemaVersion":3,"unrecognizedUserData":"keep"}';
     await primary.writeAsString(futureData);
     final newer = FileAppStateStore(directory);
     expect((await newer.load()).songs, isEmpty);
@@ -144,6 +144,44 @@ void main() {
     await expectLater(newer.save(const AppSnapshot()), throwsStateError);
     expect(await primary.readAsString(), futureData);
   });
+
+  test(
+    'version-one file migrates and mixed online identity persists without a stream URL',
+    () async {
+      final primary = File('${directory.path}/state.json');
+      await primary.writeAsString(
+        jsonEncode({
+          ...AppSnapshot(
+            songs: [song],
+            queue: [song],
+            currentId: song.id,
+          ).toJson(),
+          'schemaVersion': 1,
+        }),
+      );
+      final old = await store.load();
+      expect(old.queue.single.id, song.id);
+      final online = Song.online(
+        sourceId: 'source',
+        trackId: 'remote-A',
+        title: 'Online',
+      );
+      await store.save(
+        AppSnapshot(
+          songs: old.songs,
+          queue: [song, online],
+          currentId: online.id,
+        ),
+      );
+      final text = await primary.readAsString();
+      expect(jsonDecode(text)['schemaVersion'], 2);
+      expect(text, contains('hanmusic://track/source/remote-A'));
+      expect(text, isNot(contains('https://')));
+      final restored = await FileAppStateStore(directory).load();
+      expect(restored.queue.last.id, online.id);
+      expect(restored.currentId, online.id);
+    },
+  );
 
   test(
     'a disk path failure produces a visible warning and rejects saving',
@@ -188,14 +226,12 @@ void main() {
       await store.load();
       await store.save(AppSnapshot(songs: [song]));
       await store.save(AppSnapshot(songs: [song]));
-      final invalid = AppSnapshot(
-        songs: [
-          Song(
-            uri: Uri.parse('file:///D:/audio.mp3?query=1'),
-            fileName: 'audio.mp3',
-          ),
+      final invalid = {
+        ...const AppSnapshot().toJson(),
+        'songs': [
+          {'uri': 'file:///D:/audio.mp3?query=1', 'fileName': 'audio.mp3'},
         ],
-      ).toJson();
+      };
       await File(
         '${directory.path}/state.json',
       ).writeAsString(jsonEncode(invalid));

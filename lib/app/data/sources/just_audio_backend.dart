@@ -15,10 +15,25 @@ void initializeAudioBackend() {
 
 class JustAudioBackend implements AudioBackend {
   JustAudioBackend() {
+    _player = _audioZone.run(AudioPlayer.new);
     _errorSubscription = _player.errorStream.listen(_reportError);
   }
 
-  final AudioPlayer _player = AudioPlayer();
+  // This bridge has no disabled MPV log level and prints decoder logs verbatim.
+  // Keep error events, but prevent its console messages leaking signed URLs.
+  final Zone _audioZone = Zone.current.fork(
+    specification: ZoneSpecification(
+      print: (self, parent, zone, line) {
+        if (!line.startsWith('MPV: ')) {
+          parent.print(
+            zone,
+            line.replaceAll(RegExp(r'https?://[^\s]+'), '<stream-url>'),
+          );
+        }
+      },
+    ),
+  );
+  late final AudioPlayer _player;
   final StreamController<Object> _errors = StreamController<Object>.broadcast();
   late final StreamSubscription<PlayerException> _errorSubscription;
   Completer<Duration?>? _pendingLoad;
@@ -58,14 +73,14 @@ class JustAudioBackend implements AudioBackend {
     // load Future pending. Race that Future with errorStream and bound silence.
     final result = Future.any<Duration?>([
       pending.future,
-      _player.setAudioSource(AudioSource.uri(uri)),
+      _audioZone.run(() => _player.setAudioSource(AudioSource.uri(uri))),
     ]);
     try {
       return await result.timeout(const Duration(seconds: 15));
     } catch (_) {
       // stop() deactivates/disposes the native player. The next source starts
       // a fresh native instance, so late events from a failed load cannot leak.
-      if (!_disposed) await _player.stop();
+      if (!_disposed) await _audioZone.run(_player.stop);
       rethrow;
     } finally {
       _pendingLoad = null;
@@ -76,15 +91,21 @@ class JustAudioBackend implements AudioBackend {
   Future<void> play() async {
     // just_audio's play Future lasts until pause/completion. Do not lock the UI
     // for the duration of a song, but still surface asynchronous native errors.
-    unawaited(_player.play().catchError((Object error) => _reportError(error)));
+    unawaited(
+      _audioZone
+          .run(_player.play)
+          .catchError((Object error) => _reportError(error)),
+    );
   }
 
   @override
-  Future<void> pause() => _player.pause();
+  Future<void> pause() => _audioZone.run(_player.pause);
   @override
-  Future<void> seek(Duration position) => _player.seek(position);
+  Future<void> seek(Duration position) =>
+      _audioZone.run(() => _player.seek(position));
   @override
-  Future<void> setVolume(double volume) => _player.setVolume(volume);
+  Future<void> setVolume(double volume) =>
+      _audioZone.run(() => _player.setVolume(volume));
 
   @override
   Future<void> dispose() async {
@@ -95,7 +116,7 @@ class JustAudioBackend implements AudioBackend {
       pending.completeError(StateError('Audio backend is closed.'));
     }
     await _errorSubscription.cancel();
-    await _player.dispose();
+    await _audioZone.run(_player.dispose);
     await _errors.close();
   }
 }

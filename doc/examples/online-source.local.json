@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "local-demo",
+  "name": "本地测试源",
+  "baseUrl": "http://127.0.0.1:8765/",
+  "timeoutSeconds": 10,
+  "search": {
+    "path": "search",
+    "queryParameter": "q",
+    "pageParameter": "page",
+    "limitParameter": "limit",
+    "firstPage": 1,
+    "pageSize": 2,
+    "itemsPath": "data.items",
+    "fields": {
+      "id": "id",
+      "title": "title",
+      "artist": "artist",
+      "album": "album",
+      "durationSeconds": "duration"
+    },
+    "hasMorePath": "data.hasMore"
+  },
+  "playback": {
+    "path": "play",
+    "idParameter": "id",
+    "urlPath": "data.url"
+  }
+}

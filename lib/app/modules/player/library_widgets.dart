@@ -11,6 +11,26 @@ class _LibraryPlayerPage extends StatefulWidget {
 class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
   int _section = 0;
   PlayerController get controller => widget.controller;
+  OnlineMusicController? _online;
+
+  @override
+  void initState() {
+    super.initState();
+    final service = controller.online;
+    if (service != null) {
+      _online = OnlineMusicController(
+        service: service,
+        playSong: controller.playOnlineSong,
+        enqueueSong: controller.addToQueue,
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _online?.onClose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -23,6 +43,7 @@ class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
               _LibraryNavigation(
                 compact: compact,
                 selected: _section,
+                showOnline: _online != null,
                 onSelected: (value) => setState(() => _section = value),
               ),
               Expanded(
@@ -39,10 +60,11 @@ class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            _LibraryHeader(
-                              controller: controller,
-                              section: _section,
-                            ),
+                            if (_section != 3)
+                              _LibraryHeader(
+                                controller: controller,
+                                section: _section,
+                              ),
                             const SizedBox(height: 14),
                             Obx(() {
                               final error = controller.errorMessage.value;
@@ -70,6 +92,7 @@ class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
                                   ),
                                 ),
                                 2 => _QueueView(controller: controller),
+                                3 => OnlineMusicPage(controller: _online!),
                                 _ => _LibraryView(controller: controller),
                               },
                             ),
@@ -94,8 +117,10 @@ class _LibraryNavigation extends StatelessWidget {
     required this.compact,
     required this.selected,
     required this.onSelected,
+    required this.showOnline,
   });
   final bool compact;
+  final bool showOnline;
   final int selected;
   final ValueChanged<int> onSelected;
 
@@ -137,6 +162,7 @@ class _LibraryNavigation extends StatelessWidget {
           (index: 0, label: '本地曲库', icon: Icons.library_music_outlined),
           (index: 1, label: '正在播放', icon: Icons.album_outlined),
           (index: 2, label: '播放队列', icon: Icons.queue_music_rounded),
+          if (showOnline) (index: 3, label: '在线音乐', icon: Icons.cloud_outlined),
         ])
           Padding(
             padding: const EdgeInsets.only(bottom: 9),
@@ -706,7 +732,11 @@ class _QueueView extends StatelessWidget {
                               ),
                             ),
                             Text(
-                              song.isMissing ? '文件缺失' : song.artist ?? '未知歌手',
+                              song.isMissing
+                                  ? '文件缺失'
+                                  : song.isOnline
+                                  ? '${controller.sourceLabel(song)} · ${song.artist ?? '未知歌手'}'
+                                  : song.artist ?? '未知歌手',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
@@ -801,6 +831,8 @@ class _DesktopTransport extends StatelessWidget {
                     Text(
                       loading
                           ? '正在加载…'
+                          : song?.isOnline == true
+                          ? '${controller.sourceLabel(song!)} · ${song.artist ?? '未知歌手'}'
                           : song?.artist ??
                                 (song == null ? '本地音乐，随时聆听' : '未知歌手'),
                       maxLines: 1,

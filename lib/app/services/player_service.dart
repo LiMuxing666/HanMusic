@@ -5,11 +5,13 @@ import 'package:get/get.dart';
 
 import '../data/models/play_mode.dart';
 import '../data/models/playback_guard.dart';
+import '../data/models/playback_source_exception.dart';
 import '../data/models/song.dart';
 import '../data/sources/audio_backend.dart';
 
 class PlayerService extends GetxService {
-  PlayerService(this._backend) {
+  PlayerService(this._backend, {Future<Uri> Function(Song)? resolver})
+    : _resolver = resolver {
     _subscriptions.addAll([
       _backend.states.listen((state) {
         if (_disposed) return;
@@ -46,6 +48,7 @@ class PlayerService extends GetxService {
   }
 
   final AudioBackend _backend;
+  final Future<Uri> Function(Song)? _resolver;
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   final queue = <Song>[].obs;
   final playMode = PlayMode.sequential.obs;
@@ -74,6 +77,7 @@ class PlayerService extends GetxService {
   int _selectionGeneration = 0;
   int _loadGeneration = 0;
   Future<void> _selectionTail = Future<void>.value();
+  Completer<Uri?>? _resolutionCancellation;
   Future<void>? _errorPause;
   Future<void>? _pauseInFlight;
   PlaybackGuard? _playbackGuard;
@@ -260,7 +264,7 @@ class PlayerService extends GetxService {
     if (_disposed) return;
     _playbackGuard?.onManualSelection(null);
     ++_playIntent;
-    final request = ++_selectionGeneration;
+    final request = _beginSelection();
     ++_loadGeneration;
     _wantsPlayback = false;
     _loaded.value = false;
@@ -301,7 +305,7 @@ class PlayerService extends GetxService {
     Duration resumePosition = Duration.zero,
     bool automatic = false,
   }) {
-    final request = ++_selectionGeneration;
+    final request = _beginSelection();
     ++_loadGeneration;
     _restored = false;
     isLoading.value = true;
@@ -358,13 +362,16 @@ class PlayerService extends GetxService {
     required bool autoplay,
     required Duration resumePosition,
   }) async {
-    final generation = ++_loadGeneration;
+    var generation = ++_loadGeneration;
     _loaded.value = false;
     _completed = false;
     errorMessage.value = null;
     currentSong.value = song;
     position.value = Duration.zero;
     duration.value = song.duration ?? Duration.zero;
+    if (resumePosition > Duration.zero) {
+      position.value = _clampPosition(resumePosition);
+    }
     bool valid() => _active(request) && generation == _loadGeneration;
     _LoadResult invalidResult() =>
         _active(request) ? _LoadResult.failed : _LoadResult.cancelled;
@@ -379,9 +386,66 @@ class PlayerService extends GetxService {
         errorMessage.value = '文件已丢失：${song.fileName}';
         return _LoadResult.failed;
       }
-      final length = await _backend
-          .load(song.uri)
-          .timeout(const Duration(seconds: 20));
+      Duration? length;
+      for (var attempt = 0; ; attempt++) {
+        Uri playbackUri;
+        if (song.isOnline) {
+          final resolver = _resolver;
+          if (resolver == null) {
+            throw const PlaybackSourceException('未配置在线音乐源，请先添加可用的音乐源。');
+          }
+          final resolved = await _resolveSource(song, resolver);
+          if (resolved == null) return _LoadResult.cancelled;
+          playbackUri = resolved;
+          if (!valid()) return invalidResult();
+          if (playbackUri.scheme != 'http' && playbackUri.scheme != 'https' ||
+              playbackUri.host.isEmpty ||
+              playbackUri.userInfo.isNotEmpty) {
+            throw const PlaybackSourceException('音乐源返回了不支持的播放地址。');
+          }
+          if (intent != _playIntent ||
+              _pauseForGuard(PlaybackBoundary.beforePlay)) {
+            _restored = true;
+            return _LoadResult.cancelled;
+          }
+        } else {
+          if (song.uri.scheme != 'file') {
+            throw const PlaybackSourceException('歌曲地址无效，请重新添加歌曲。');
+          }
+          playbackUri = song.uri;
+        }
+        try {
+          length = await _backend
+              .load(playbackUri)
+              .timeout(const Duration(seconds: 20));
+          if (!valid()) {
+            if (!_active(request)) return _LoadResult.cancelled;
+            throw const PlaybackSourceException('音频加载失败，请检查音乐源或网络。');
+          }
+          break;
+        } catch (_) {
+          if (!_active(request)) return _LoadResult.cancelled;
+          if (!song.isOnline || attempt >= 1) rethrow;
+          if (_pauseForGuard(PlaybackBoundary.error) || intent != _playIntent) {
+            _restored = true;
+            return _LoadResult.cancelled;
+          }
+          if (_errorPause case final pending?) {
+            await pending;
+          } else {
+            await _backend.pause();
+          }
+          if (!_active(request)) return _LoadResult.cancelled;
+          if (intent != _playIntent ||
+              _pauseForGuard(PlaybackBoundary.beforePlay)) {
+            _restored = true;
+            return _LoadResult.cancelled;
+          }
+          generation = ++_loadGeneration;
+          _failedIds.remove(song.id);
+          errorMessage.value = null;
+        }
+      }
       if (!valid()) return invalidResult();
       duration.value = length ?? song.duration ?? Duration.zero;
       _loaded.value = true;
@@ -403,12 +467,16 @@ class PlayerService extends GetxService {
         if (!valid()) return invalidResult();
       }
       return _LoadResult.loaded;
-    } catch (_) {
+    } catch (error) {
       if (!_active(request)) return _LoadResult.cancelled;
       _pauseForGuard(PlaybackBoundary.error);
       _loaded.value = false;
       isPlaying.value = false;
-      errorMessage.value = '无法播放此文件，请检查文件是否损坏或已被移动。';
+      errorMessage.value = error is PlaybackSourceException
+          ? error.message
+          : song.isOnline
+          ? '无法播放在线歌曲，请检查音乐源或网络后重试。'
+          : '无法播放此文件，请检查文件是否损坏或已被移动。';
       try {
         if (_errorPause case final pending?) {
           await pending;
@@ -420,6 +488,36 @@ class PlayerService extends GetxService {
       }
       return _active(request) ? _LoadResult.failed : _LoadResult.cancelled;
     }
+  }
+
+  Future<Uri?> _resolveSource(
+    Song song,
+    Future<Uri> Function(Song) resolver,
+  ) async {
+    final cancellation = Completer<Uri?>();
+    _resolutionCancellation = cancellation;
+    try {
+      // A superseded HTTP lookup must not keep newer selections behind the
+      // native-load barrier. Future.any also consumes a late lookup failure.
+      return await Future.any<Uri?>([
+        resolver(song).timeout(const Duration(seconds: 20)),
+        cancellation.future,
+      ]);
+    } finally {
+      if (identical(_resolutionCancellation, cancellation)) {
+        _resolutionCancellation = null;
+      }
+    }
+  }
+
+  int _beginSelection() {
+    final generation = ++_selectionGeneration;
+    final cancellation = _resolutionCancellation;
+    _resolutionCancellation = null;
+    if (cancellation != null && !cancellation.isCompleted) {
+      cancellation.complete(null);
+    }
+    return generation;
   }
 
   void _handleBackendError(Object error) {
@@ -624,7 +722,11 @@ class PlayerService extends GetxService {
     }
   }
 
-  Future<void> pause() async {
+  Future<void> pause() => _pause();
+
+  Future<void> pauseForSleepTimer() => _pause(throwOnError: true);
+
+  Future<void> _pause({bool throwOnError = false}) async {
     if (_disposed) return;
     _playIntent++;
     _wantsPlayback = false;
@@ -638,6 +740,7 @@ class PlayerService extends GetxService {
       if (!_disposed) isPlaying.value = false;
     } catch (_) {
       if (!_disposed) errorMessage.value = '未能暂停播放，请关闭应用以停止音频。';
+      if (throwOnError) throw StateError('未能暂停音频，请关闭应用以停止播放。');
     } finally {
       if (identical(_pauseInFlight, completion.future)) _pauseInFlight = null;
       completion.complete();
@@ -696,7 +799,7 @@ class PlayerService extends GetxService {
 
   Future<void> _clearSelection() async {
     _playbackGuard?.onManualSelection(null);
-    final request = ++_selectionGeneration;
+    final request = _beginSelection();
     ++_loadGeneration;
     ++_playIntent;
     _wantsPlayback = false;
@@ -734,7 +837,7 @@ class PlayerService extends GetxService {
   Future<void> shutdown() async {
     if (_disposed) return;
     _disposed = true;
-    ++_selectionGeneration;
+    _beginSelection();
     ++_loadGeneration;
     ++_playIntent;
     _wantsPlayback = false;

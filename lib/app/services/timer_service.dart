@@ -155,7 +155,7 @@ class TimerService extends GetxService {
     remaining.value = null;
     currentSongId.value = null;
     mode.value = SleepTimerMode.off;
-    statusMessage.value = '定时已停止播放';
+    statusMessage.value = '正在暂停播放…';
     unawaited(_notifyExpired(generation));
   }
 
@@ -166,8 +166,12 @@ class TimerService extends GetxService {
 
     try {
       await _onExpired();
+      if (!_closed && generation == _generation) {
+        statusMessage.value = '定时已停止播放';
+      }
     } catch (error, stackTrace) {
       if (_closed || generation != _generation) return;
+      statusMessage.value = '暂停失败，请关闭应用以停止音频。';
       try {
         if (_onError case final onError?) {
           onError(error, stackTrace);
