@@ -50,6 +50,18 @@
 
 `dart format lib test tool` 检查 75 个文件，无格式变更；全量 `flutter test --no-pub --reporter expanded` **264 项通过**（46 秒测试运行时间）。随后将探针结果路径的早期拒绝也纳入显式退出边界；最终全量静态分析无问题，相关 5 项探针用例再次全部通过。原始日志为 `format.txt`、`tests.txt`、`analyze-final.txt`、`probe-tests-final.txt`。
 
-代码与诊断验证已完成；本轮代码提交后从干净源码重新构建正常入口 dev.7 预览，随后补记实际包的哈希与检查结果。
+从干净提交 `4587d286b8328cffb0e4b1e93d36dbffe3469df9` 通过系统 Windows PowerShell 5.1 执行打包脚本，重新构建正常入口 `lib/main.dart`，Release 构建成功（118.9 秒）。清单记录版本 `0.1.0-dev.7+7`、`gitDirty=false`，仍为开发预览。
 
-实际出声、原生文件对话框/窗口操作、真实休眠和设备切换、系统 DPI、干净机器与对外发行材料仍保留；完整门槛见 [开发计划](./05-Windows版本开发计划.md)。所有诊断入口都不能作为产品交付入口，最终预览需重新构建 `lib/main.dart`。
+| 交付项 | 实际结果 |
+| --- | --- |
+| ZIP | `D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-dev.7-M5.zip` |
+| ZIP 大小 | 20,474,343 字节 |
+| ZIP SHA-256 | `c364f77dc7de506862a96d531c6b93ca2535c539e904a574b024e943520da7c4` |
+| 文件清单 | 32 个内容文件及其路径、大小、哈希全部核对通过，加上清单共 33 个文件 |
+| 数据目录 | 包内不预置 `UserData`；启动器在解压目录创建 `UserData` 及 `online` |
+
+随后通过实际系统 PowerShell `5.1.26100.9444` 运行 `tool/verify_windows_preview.ps1 -CheckDataDirectoryLock`，五项检查全部通过。验证将 ZIP 解压到 D 盘含中文与空格的独立路径，通过包内 `Start-HanMusic.cmd` 启动；八秒观察期间程序持续存活、响应，启动器退出码为 0。运行期间对同一区间申请锁得到 Win32 错误 33，确认锁冲突；只终止本次准确识别的测试进程后，首次重试在 33 ms 内取得锁，应用与启动辅助进程均已清理。该检查没有执行原生 GUI 交互或正常关窗。
+
+原始日志为 `package-dev7.txt`、`verify-dev7.txt`，完整结果另存于证据目录的 `package-verification-dev7.json`。ZIP 同目录保留 `.sha256` 文件；该哈希用于完整性核对，不是发布者签名。最终文档提交仅补记此次交付证据，包清单的源码提交仍为上述 `4587d28`。
+
+实际出声、原生文件对话框/窗口操作、真实休眠和设备切换、系统 DPI、干净机器与对外发行材料仍保留；完整门槛见 [开发计划](./05-Windows版本开发计划.md)。所有诊断入口都不能作为产品交付入口，本次 dev.7 预览已重新构建并核对 `lib/main.dart`。
