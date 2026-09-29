@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 
 import '../../data/models/song.dart';
 import '../../data/models/play_mode.dart';
+import '../../data/models/sleep_timer_mode.dart';
 import '../../data/repositories/local_song_picker.dart';
 import '../../services/library_service.dart';
 import '../../services/player_service.dart';
@@ -58,6 +59,16 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
   RxDouble get volume => _player.volume;
   RxnString get errorMessage => _player.errorMessage;
   Rxn<Duration> get timerRemaining => _timer.remaining;
+  Rx<SleepTimerMode> get timerMode => _timer.mode;
+  RxnString get timerStatusMessage => _timer.statusMessage;
+  bool get timerActive => _timer.isActive;
+  bool get canExtendSleepTimer => _timer.canExtend;
+  bool get canStopAfterCurrentSong =>
+      !_closed &&
+      currentSong.value != null &&
+      !currentSong.value!.isMissing &&
+      canPlay &&
+      !isLoading.value;
   bool get canPlay => _player.canPlay;
 
   @override
@@ -154,7 +165,15 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
   Future<void> togglePlayback() => _player.togglePlayback();
   Future<void> seek(Duration value) => _player.seek(value);
   Future<void> setVolume(double value) => _player.setVolume(value);
-  void startSleepTimer(Duration value) => _timer.start(value);
+  void startSleepTimer(Duration value) {
+    if (!_closed) _timer.start(value);
+  }
+
+  void startSleepTimerAfterCurrentSong() {
+    if (canStopAfterCurrentSong) _timer.startEndOfTrack(currentSong.value!.id);
+  }
+
+  bool extendSleepTimer() => !_closed && _timer.extend10Minutes();
   void cancelSleepTimer() => _timer.cancel();
   void dismissError() => errorMessage.value = null;
 

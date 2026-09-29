@@ -3,6 +3,7 @@
 
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
+#include <flutter/method_channel.h>
 
 #include <memory>
 
@@ -28,6 +29,10 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  // Power resume is independent of window visibility or keyboard focus.
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> power_channel_;
+  HPOWERNOTIFY power_notification_ = nullptr;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

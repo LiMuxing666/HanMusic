@@ -1,6 +1,7 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <flutter/standard_method_codec.h>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -25,6 +26,12 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  power_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "hanmusic/power",
+          &flutter::StandardMethodCodec::GetInstance());
+  power_notification_ =
+      RegisterSuspendResumeNotification(GetHandle(), DEVICE_NOTIFY_WINDOW_HANDLE);
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -40,6 +47,11 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  if (power_notification_) {
+    UnregisterSuspendResumeNotification(power_notification_);
+    power_notification_ = nullptr;
+  }
+  power_channel_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -51,6 +63,14 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  const bool resumed =
+      message == WM_POWERBROADCAST &&
+      (wparam == PBT_APMRESUMEAUTOMATIC || wparam == PBT_APMRESUMESUSPEND);
+  // Forward before plugin dispatch, since a plugin may consume the message.
+  // Both resume events can arrive; the Dart deadline check is idempotent.
+  if (resumed && power_channel_) {
+    power_channel_->InvokeMethod("resume", nullptr);
+  }
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =
@@ -62,6 +82,9 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
+    case WM_POWERBROADCAST:
+      if (resumed) return TRUE;
+      break;
     case WM_FONTCHANGE:
       flutter_controller_->engine()->ReloadSystemFonts();
       break;

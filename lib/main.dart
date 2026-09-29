@@ -12,10 +12,12 @@ import 'app/data/models/song.dart';
 import 'app/data/repositories/app_state_store.dart';
 import 'app/data/repositories/local_library_repository.dart';
 import 'app/data/sources/just_audio_backend.dart';
+import 'app/data/sources/windows_power_events.dart';
 import 'app/routes/app_pages.dart';
 import 'app/services/app_persistence_service.dart';
 import 'app/services/library_service.dart';
 import 'app/services/player_service.dart';
+import 'app/services/sleep_timer_coordinator.dart';
 import 'app/services/timer_service.dart';
 
 Future<void> main() async {
@@ -72,7 +74,8 @@ Future<void> main() async {
     permanent: true,
   );
   persistence.start();
-  Get.put(TimerService(onExpired: player.pause), permanent: true);
+  final timer = Get.put(TimerService(onExpired: player.pause), permanent: true);
+  Get.put(SleepTimerCoordinator(player: player, timer: timer), permanent: true);
   runApp(const HanMusicApp());
 }
 
@@ -85,17 +88,25 @@ class HanMusicApp extends StatefulWidget {
 
 class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
   Future<void>? _shutdownTask;
+  WindowsPowerEvents? _powerEvents;
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (Platform.isWindows) {
+      _powerEvents = WindowsPowerEvents(
+        onResume: Get.find<TimerService>().checkDeadline,
+      )..start();
+    }
   }
 
   Future<void> _shutdown() => _shutdownTask ??= _closeServices();
 
   Future<void> _closeServices() async {
     Get.find<LibraryService>().cancelImport();
-    Get.find<TimerService>().cancel();
+    _powerEvents?.dispose();
+    Get.find<SleepTimerCoordinator>().onClose();
+    Get.find<TimerService>().onClose();
     await Get.find<PlayerService>().pause();
     await Get.find<AppPersistenceService>().close();
     await Get.find<PlayerService>().shutdown();

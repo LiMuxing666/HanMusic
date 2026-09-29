@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:han_music/app/core/theme/app_theme.dart';
 import 'package:han_music/app/data/models/song.dart';
+import 'package:han_music/app/data/models/sleep_timer_mode.dart';
 import 'package:han_music/app/data/repositories/local_song_picker.dart';
 import 'package:han_music/app/data/repositories/local_library_repository.dart';
 import 'package:han_music/app/services/library_service.dart';
@@ -12,6 +13,7 @@ import 'package:han_music/app/modules/player/controller.dart';
 import 'package:han_music/app/modules/player/view.dart';
 import 'package:han_music/app/services/player_service.dart';
 import 'package:han_music/app/services/timer_service.dart';
+import 'package:han_music/app/services/sleep_timer_coordinator.dart';
 
 import 'support/fake_audio_backend.dart';
 
@@ -21,6 +23,132 @@ final _song = Song(
 );
 
 void main() {
+  testWidgets(
+    'custom sleep timer rejects oversized integers and accepts 24 hours',
+    (tester) async {
+      await _withPlayer(
+        tester,
+        withLibrary: true,
+        run: (fixture) async {
+          fixture.controller.startSleepTimer(const Duration(minutes: 15));
+          await tester.pumpAndSettle();
+          await tester.tap(_timerButton);
+          await tester.pumpAndSettle();
+          final input = find.byKey(const Key('sleep-timer-minutes'));
+          final confirm = find.byKey(const Key('sleep-timer-confirm'));
+          for (final value in [
+            '1441',
+            '9223372036854775807',
+            '999999999999999999999999999999999999',
+          ]) {
+            await tester.ensureVisible(input);
+            await tester.enterText(input, value);
+            await tester.tap(confirm);
+            await tester.pumpAndSettle();
+            expect(find.text('请输入 1–1440 的整数分钟'), findsOneWidget);
+            expect(fixture.timer.remaining.value, const Duration(minutes: 15));
+            expect(tester.takeException(), isNull);
+          }
+          await tester.enterText(input, '1440');
+          await tester.tap(confirm);
+          await tester.pumpAndSettle();
+          expect(fixture.timer.remaining.value, const Duration(hours: 24));
+          expect(find.byType(AlertDialog), findsNothing);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+  );
+
+  testWidgets(
+    'sleep timer modes, extension and cancellation fit compact large text',
+    (tester) async {
+      await _withPlayer(
+        tester,
+        withLibrary: true,
+        size: const Size(800, 600),
+        textScale: 1.5,
+        run: (fixture) async {
+          await tester.tap(_timerButton);
+          await tester.pumpAndSettle();
+          final endTrack = find.byKey(const Key('sleep-timer-end-track'));
+          expect(tester.widget<ChoiceChip>(endTrack).onSelected, isNull);
+          await tester.tap(find.text('暂不设置'));
+          await tester.pumpAndSettle();
+          fixture.library!.replaceAll(_librarySongs(2));
+          await fixture.controller.playLibrarySong(
+            fixture.library!.songs.first,
+          );
+          await tester.pumpAndSettle();
+          await tester.tap(_timerButton);
+          await tester.pumpAndSettle();
+          await tester.ensureVisible(find.text('90 分钟'));
+          await tester.tap(find.text('90 分钟'));
+          await tester.tap(find.byKey(const Key('sleep-timer-confirm')));
+          await tester.pumpAndSettle();
+          expect(fixture.timer.remaining.value, const Duration(minutes: 90));
+          expect(find.text('1:30:00'), findsOneWidget);
+          expect(tester.getRect(_timerButton).bottom, lessThan(600));
+
+          await tester.tap(_timerButton);
+          await tester.pumpAndSettle();
+          final extend = find.byKey(const Key('sleep-timer-dialog-extend'));
+          await tester.ensureVisible(extend);
+          await tester.tap(extend);
+          await tester.pumpAndSettle();
+          expect(fixture.timer.remaining.value, const Duration(minutes: 100));
+          await tester.ensureVisible(endTrack);
+          await tester.tap(endTrack);
+          await tester.tap(find.byKey(const Key('sleep-timer-confirm')));
+          await tester.pumpAndSettle();
+          expect(fixture.timer.mode.value, SleepTimerMode.endOfTrack);
+          expect(fixture.timer.remaining.value, isNull);
+          expect(find.text('本曲结束'), findsOneWidget);
+          expect(find.text('1:40:00'), findsNothing);
+          expect(tester.takeException(), isNull);
+
+          await tester.tap(_timerButton);
+          await tester.pumpAndSettle();
+          expect(extend, findsNothing);
+          final cancel = find.byKey(const Key('sleep-timer-dialog-cancel'));
+          await tester.ensureVisible(cancel);
+          await tester.tap(cancel);
+          await tester.pumpAndSettle();
+          expect(fixture.timer.mode.value, SleepTimerMode.off);
+          expect(find.byType(AlertDialog), findsNothing);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+  );
+
+  testWidgets('expired timer shows completion and cannot be extended', (
+    tester,
+  ) async {
+    await _withPlayer(
+      tester,
+      withLibrary: true,
+      run: (fixture) async {
+        await fixture.player.open(_song);
+        fixture.controller.startSleepTimer(const Duration(minutes: 1));
+        fixture.now = fixture.now.add(const Duration(minutes: 2));
+        fixture.controller.didChangeAppLifecycleState(
+          AppLifecycleState.resumed,
+        );
+        await tester.pumpAndSettle();
+        expect(fixture.player.isPlaying.value, isFalse);
+        await tester.tap(_timerButton);
+        await tester.pumpAndSettle();
+        expect(find.text('定时已停止播放'), findsOneWidget);
+        expect(
+          find.byKey(const Key('sleep-timer-dialog-extend')),
+          findsNothing,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+  });
+
   for (final configuration in [
     (size: const Size(1280, 720), scale: 1.0),
     (size: const Size(800, 600), scale: 1.0),
@@ -229,7 +357,7 @@ void main() {
           await tester.enterText(input, '0');
           await tester.tap(confirm);
           await tester.pumpAndSettle();
-          expect(find.text('请输入大于 0 的整数分钟'), findsOneWidget);
+          expect(find.text('请输入 1–1440 的整数分钟'), findsOneWidget);
           expect(fixture.timer.remaining.value, isNull);
 
           await tester.enterText(input, '7');
@@ -390,6 +518,7 @@ Future<void> _withPlayer(
     await tester.pumpAndSettle();
     await run(fixture);
   } finally {
+    fixture.coordinator.dispose();
     fixture.timer.onClose();
     fixture.controller.onClose();
     fixture.library?.onClose();
@@ -402,10 +531,8 @@ Future<void> _withPlayer(
 class _Fixture {
   _Fixture({bool withLibrary = false}) {
     player = PlayerService(backend);
-    timer = TimerService(
-      onExpired: player.pause,
-      now: () => DateTime(2026, 9, 29, 20),
-    );
+    timer = TimerService(onExpired: player.pause, now: () => now);
+    coordinator = SleepTimerCoordinator(player: player, timer: timer);
     if (withLibrary) {
       library = LibraryService(
         repository: LocalLibraryRepository(
@@ -427,6 +554,8 @@ class _Fixture {
   late final PlayerService player;
   late final TimerService timer;
   late final PlayerController controller;
+  late final SleepTimerCoordinator coordinator;
+  DateTime now = DateTime(2026, 9, 29, 20);
   LibraryService? library;
 }
 

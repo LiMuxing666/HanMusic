@@ -4,12 +4,14 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:han_music/app/data/models/song.dart';
+import 'package:han_music/app/data/models/sleep_timer_mode.dart';
 import 'package:han_music/app/data/repositories/local_song_picker.dart';
 import 'package:han_music/app/data/repositories/local_library_repository.dart';
 import 'package:han_music/app/services/library_service.dart';
 import 'package:han_music/app/modules/player/controller.dart';
 import 'package:han_music/app/services/player_service.dart';
 import 'package:han_music/app/services/timer_service.dart';
+import 'package:han_music/app/services/sleep_timer_coordinator.dart';
 
 import '../support/fake_audio_backend.dart';
 
@@ -20,6 +22,7 @@ void main() {
   late TimerService timer;
   late _FakeSongPicker picker;
   late PlayerController controller;
+  late SleepTimerCoordinator coordinator;
   late DateTime now;
   final song = Song(
     uri: Uri.file(r'D:\music\测试歌曲.mp3', windows: true),
@@ -31,6 +34,7 @@ void main() {
     backend = FakeAudioBackend();
     player = PlayerService(backend);
     timer = TimerService(onExpired: player.pause, now: () => now);
+    coordinator = SleepTimerCoordinator(player: player, timer: timer);
     picker = _FakeSongPicker();
     controller = PlayerController(player: player, timer: timer, picker: picker);
     controller.onStart();
@@ -38,6 +42,7 @@ void main() {
 
   tearDown(() async {
     controller.onDelete();
+    coordinator.dispose();
     timer.onClose();
     await player.shutdown();
   });
@@ -53,6 +58,76 @@ void main() {
     expect(controller.isImporting.value, isFalse);
     expect(controller.errorMessage.value, isNull);
   });
+
+  test('end-of-track timer is only available for a ready valid song', () async {
+    expect(controller.canStopAfterCurrentSong, isFalse);
+    controller.startSleepTimerAfterCurrentSong();
+    expect(timer.mode.value, SleepTimerMode.off);
+    await player.open(song);
+    expect(controller.canStopAfterCurrentSong, isTrue);
+    controller.startSleepTimerAfterCurrentSong();
+    expect(timer.currentSongId.value, song.id);
+    expect(controller.timerRemaining.value, isNull);
+    expect(controller.extendSleepTimer(), isFalse);
+    await controller.togglePlayback();
+    await controller.seek(const Duration(seconds: 30));
+    expect(timer.mode.value, SleepTimerMode.endOfTrack);
+    await controller.togglePlayback();
+    expect(timer.mode.value, SleepTimerMode.endOfTrack);
+    backend.loadFailure = StateError('Corrupt audio');
+    await player.open(
+      song.copyWith(uri: Uri.file(r'D:\music\损坏.mp3', windows: true)),
+    );
+    expect(controller.canStopAfterCurrentSong, isFalse);
+    controller.startSleepTimerAfterCurrentSong();
+    expect(timer.mode.value, SleepTimerMode.off);
+  });
+
+  test(
+    'extension uses the original deadline and mode replacement clears old state',
+    () async {
+      await player.open(song);
+      controller.startSleepTimer(const Duration(minutes: 90));
+      final originalDeadline = timer.deadline.value!;
+      now = now.add(const Duration(minutes: 13));
+      expect(controller.extendSleepTimer(), isTrue);
+      expect(
+        timer.deadline.value,
+        originalDeadline.add(const Duration(minutes: 10)),
+      );
+      expect(timer.remaining.value, const Duration(minutes: 87));
+      controller.startSleepTimerAfterCurrentSong();
+      expect(timer.mode.value, SleepTimerMode.endOfTrack);
+      expect(timer.deadline.value, isNull);
+      expect(timer.remaining.value, isNull);
+      controller.startSleepTimer(const Duration(minutes: 15));
+      expect(timer.mode.value, SleepTimerMode.countdown);
+      expect(timer.currentSongId.value, isNull);
+      now = now.add(const Duration(minutes: 16));
+      expect(controller.extendSleepTimer(), isFalse);
+      await _flushCallbacks();
+      expect(timer.mode.value, SleepTimerMode.off);
+      expect(player.isPlaying.value, isFalse);
+    },
+  );
+
+  test(
+    'manual controller track selection cancels an end-of-track task',
+    () async {
+      final nextSong = song.copyWith(
+        uri: Uri.file(r'D:\music\下一首.mp3', windows: true),
+      );
+      await player.playQueue([song, nextSong]);
+      controller.startSleepTimerAfterCurrentSong();
+      await controller.next();
+      expect(timer.mode.value, SleepTimerMode.off);
+      expect(player.currentSong.value!.id, nextSong.id);
+      controller.startSleepTimerAfterCurrentSong();
+      await controller.removeFromQueue(nextSong.id);
+      expect(timer.mode.value, SleepTimerMode.off);
+      expect(player.queue, hasLength(1));
+    },
+  );
 
   test(
     'picker errors are reported without replacing the playing track',
@@ -92,6 +167,7 @@ void main() {
     backend.loadCompleter = Completer<Duration?>();
     final opening = player.open(song);
     await _flushCallbacks();
+    expect(controller.canStopAfterCurrentSong, isFalse);
     await controller.importFile();
     expect(picker.calls, 0);
 

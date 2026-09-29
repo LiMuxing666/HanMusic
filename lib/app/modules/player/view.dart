@@ -7,6 +7,7 @@ import 'package:get/get.dart';
 import 'controller.dart';
 import '../../data/models/song.dart';
 import '../../data/models/play_mode.dart';
+import '../../data/models/sleep_timer_mode.dart';
 
 part 'library_widgets.dart';
 
@@ -710,78 +711,104 @@ class _ProgressSliderState extends State<_ProgressSlider> {
 
 class _SleepTimerCard extends StatelessWidget {
   const _SleepTimerCard({required this.controller});
-
   final PlayerController controller;
 
   @override
-  Widget build(BuildContext context) {
-    return _Panel(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
-      child: Obx(() {
-        final remaining = controller.timerRemaining.value;
-        return Row(
-          children: [
-            Container(
-              width: 43,
-              height: 43,
-              decoration: BoxDecoration(
-                color: const Color(0xFFECF1E5),
-                borderRadius: BorderRadius.circular(13),
+  Widget build(BuildContext context) => _Panel(
+    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+    child: Obx(() {
+      final active = controller.timerActive;
+      final mode = controller.timerMode.value;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 43,
+                height: 43,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFECF1E5),
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: const Icon(
+                  Icons.bedtime_outlined,
+                  color: _green,
+                  size: 21,
+                ),
               ),
-              child: const Icon(
-                Icons.bedtime_outlined,
-                color: _green,
-                size: 21,
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('睡眠定时', style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 4),
-                  Text(
-                    remaining == null
-                        ? '设定一个时间，让音乐陪你入眠。'
-                        : '${_formatTime(remaining)} 后停止播放',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: remaining == null ? _muted : _green,
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          '睡眠定时',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        if (active) ...[
+                          const SizedBox(width: 10),
+                          _StatusTag(
+                            label: mode == SleepTimerMode.countdown
+                                ? '倒计时'
+                                : '按曲结束',
+                            active: true,
+                          ),
+                        ],
+                      ],
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 4),
+                    Text(
+                      _sleepTimerSummary(controller),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: active ? _green : _muted,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            if (remaining != null) ...[
-              TextButton(
-                key: const Key('sleep-timer-cancel'),
-                onPressed: controller.cancelSleepTimer,
-                child: const Text('取消'),
-              ),
-              const SizedBox(width: 6),
             ],
-            OutlinedButton(
-              key: const Key('sleep-timer-open'),
-              onPressed: () => showDialog<void>(
-                context: context,
-                builder: (context) => _SleepTimerDialog(controller: controller),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              if (controller.canExtendSleepTimer)
+                TextButton(
+                  key: const Key('sleep-timer-extend'),
+                  onPressed: controller.extendSleepTimer,
+                  child: const Text('顺延 10 分钟'),
+                ),
+              if (active)
+                TextButton(
+                  key: const Key('sleep-timer-cancel'),
+                  onPressed: controller.cancelSleepTimer,
+                  child: const Text('取消'),
+                ),
+              OutlinedButton(
+                key: const Key('sleep-timer-open'),
+                onPressed: () => showDialog<void>(
+                  context: context,
+                  builder: (_) => _SleepTimerDialog(controller: controller),
+                ),
+                child: Text(active ? '更换设定' : '设置定时'),
               ),
-              child: Text(remaining == null ? '设置定时' : '调整时间'),
-            ),
-          ],
-        );
-      }),
-    );
-  }
+            ],
+          ),
+        ],
+      );
+    }),
+  );
 }
 
 class _SleepTimerDialog extends StatefulWidget {
   const _SleepTimerDialog({required this.controller});
-
   final PlayerController controller;
-
   @override
   State<_SleepTimerDialog> createState() => _SleepTimerDialogState();
 }
@@ -790,6 +817,14 @@ class _SleepTimerDialogState extends State<_SleepTimerDialog> {
   final _formKey = GlobalKey<FormState>();
   final _minutesController = TextEditingController();
   int? _preset = 30;
+  bool _afterCurrent = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _afterCurrent =
+        widget.controller.timerMode.value == SleepTimerMode.endOfTrack;
+  }
 
   @override
   void dispose() {
@@ -798,79 +833,164 @@ class _SleepTimerDialogState extends State<_SleepTimerDialog> {
   }
 
   void _submit() {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
-    final minutes = _preset ?? int.parse(_minutesController.text);
-    widget.controller.startSleepTimer(Duration(minutes: minutes));
+    if (_afterCurrent) {
+      if (!widget.controller.canStopAfterCurrentSong) return;
+      widget.controller.startSleepTimerAfterCurrentSong();
+    } else {
+      if (!(_formKey.currentState?.validate() ?? false)) return;
+      final minutes = _preset ?? int.parse(_minutesController.text);
+      widget.controller.startSleepTimer(Duration(minutes: minutes));
+    }
     Navigator.of(context).pop();
   }
 
   @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('睡眠定时'),
-      content: SizedBox(
-        width: 360,
-        child: Form(
-          key: _formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('倒计时结束后，音乐将自动停止。', style: TextStyle(color: _muted)),
-              const SizedBox(height: 20),
-              Wrap(
-                spacing: 10,
-                runSpacing: 8,
-                children: [
-                  for (final minutes in [15, 30, 60])
-                    ChoiceChip(
-                      label: Text('$minutes 分钟'),
-                      selected: _preset == minutes,
-                      onSelected: (_) => setState(() {
-                        _preset = minutes;
-                        _minutesController.clear();
-                      }),
-                    ),
-                ],
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('睡眠定时'),
+    scrollable: true,
+    content: SizedBox(
+      width: 420,
+      child: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Obx(
+              () => Text(
+                widget.controller.timerActive
+                    ? '当前：${_sleepTimerSummary(widget.controller)}'
+                    : widget.controller.timerStatusMessage.value ??
+                          '设置后自动暂停，保留队列和播放位置。',
+                key: const Key('sleep-timer-status'),
+                style: const TextStyle(color: _green, fontSize: 13),
               ),
-              const SizedBox(height: 20),
-              TextFormField(
-                key: const Key('sleep-timer-minutes'),
-                controller: _minutesController,
-                decoration: const InputDecoration(
-                  labelText: '自定义时长',
-                  hintText: '输入分钟数',
-                  suffixText: '分钟',
-                ),
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                onChanged: (_) => setState(() => _preset = null),
-                onFieldSubmitted: (_) => _submit(),
-                validator: (value) {
-                  if (_preset != null) return null;
-                  final minutes = int.tryParse(value ?? '');
-                  if (minutes == null || minutes <= 0) return '请输入大于 0 的整数分钟';
-                  return null;
-                },
+            ),
+            const SizedBox(height: 18),
+            Wrap(
+              spacing: 10,
+              runSpacing: 8,
+              children: [
+                for (final minutes in [15, 30, 60, 90])
+                  ChoiceChip(
+                    label: Text('$minutes 分钟'),
+                    selected: !_afterCurrent && _preset == minutes,
+                    onSelected: (_) => setState(() {
+                      _afterCurrent = false;
+                      _preset = minutes;
+                      _minutesController.clear();
+                    }),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              key: const Key('sleep-timer-minutes'),
+              controller: _minutesController,
+              decoration: const InputDecoration(
+                labelText: '自定义时长',
+                hintText: '输入分钟数',
+                suffixText: '分钟',
+                helperText: '1–1440 分钟，最多 24 小时',
               ),
-            ],
-          ),
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              onChanged: (_) => setState(() {
+                _afterCurrent = false;
+                _preset = null;
+              }),
+              onFieldSubmitted: (_) => _submit(),
+              validator: (value) {
+                if (_afterCurrent || _preset != null) return null;
+                final minutes = int.tryParse(value ?? '');
+                if (minutes == null || minutes < 1 || minutes > 1440) {
+                  return '请输入 1–1440 的整数分钟';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 14),
+            Obx(
+              () => ChoiceChip(
+                key: const Key('sleep-timer-end-track'),
+                label: const Text('播完当前歌曲后停止'),
+                selected: _afterCurrent,
+                onSelected: widget.controller.canStopAfterCurrentSong
+                    ? (_) => setState(() => _afterCurrent = true)
+                    : null,
+              ),
+            ),
+            const SizedBox(height: 7),
+            Obx(
+              () => Text(
+                widget.controller.canStopAfterCurrentSong
+                    ? '按曲结束绑定当前歌曲，手动切歌会取消；暂停和拖动进度不影响。'
+                    : '先选择一首可播放的歌曲，再设置按曲结束。',
+                style: const TextStyle(color: _muted, fontSize: 12),
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              '新设定会替换旧任务。退出应用后，定时失效。',
+              style: TextStyle(color: _muted, fontSize: 12),
+            ),
+            Obx(
+              () => widget.controller.timerActive
+                  ? Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        children: [
+                          if (widget.controller.canExtendSleepTimer)
+                            OutlinedButton(
+                              key: const Key('sleep-timer-dialog-extend'),
+                              onPressed: widget.controller.extendSleepTimer,
+                              child: const Text('顺延 10 分钟'),
+                            ),
+                          TextButton(
+                            key: const Key('sleep-timer-dialog-cancel'),
+                            onPressed: () {
+                              widget.controller.cancelSleepTimer();
+                              Navigator.of(context).pop();
+                            },
+                            child: const Text('取消定时'),
+                          ),
+                        ],
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('暂不设置'),
-        ),
-        FilledButton(
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('暂不设置'),
+      ),
+      Obx(() {
+        final canStopAfterCurrent = widget.controller.canStopAfterCurrentSong;
+        return FilledButton(
           key: const Key('sleep-timer-confirm'),
-          onPressed: _submit,
-          child: const Text('开始计时'),
-        ),
-      ],
-    );
-  }
+          onPressed: _afterCurrent && !canStopAfterCurrent ? null : _submit,
+          child: Text(_afterCurrent ? '确定设置' : '开始计时'),
+        );
+      }),
+    ],
+  );
 }
+
+String _sleepTimerSummary(
+  PlayerController controller,
+) => switch (controller.timerMode.value) {
+  SleepTimerMode.endOfTrack => '播完当前歌曲后停止',
+  SleepTimerMode.countdown =>
+    '${_formatTime(controller.timerRemaining.value ?? Duration.zero)} 后停止播放',
+  SleepTimerMode.off =>
+    controller.timerStatusMessage.value ?? '设定一个时间，让音乐陪你入眠。',
+};
 
 class _ErrorNotice extends StatelessWidget {
   const _ErrorNotice({required this.message, required this.onDismiss});

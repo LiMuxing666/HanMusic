@@ -772,6 +772,8 @@ class _DesktopTransport extends StatelessWidget {
       final loading = controller.isLoading.value;
       final mode = controller.playMode.value;
       final timer = controller.timerRemaining.value;
+      final timerMode = controller.timerMode.value;
+      final timerActive = controller.timerActive;
       final volume = controller.volume.value;
       final enabled = controller.canPlay && !loading;
       final queueAvailable = controller.queue.isNotEmpty && !loading;
@@ -849,23 +851,33 @@ class _DesktopTransport extends StatelessWidget {
                   PlayMode.shuffle => Icons.shuffle_rounded,
                 }, size: 22),
               ),
-              IconButton(
-                key: const Key('sleep-timer-open'),
-                tooltip: timer == null ? '睡眠定时' : '${_formatTime(timer)} 后停止播放',
-                onPressed: () => showDialog<void>(
-                  context: context,
-                  builder: (_) => _SleepTimerDialog(controller: controller),
-                ),
-                icon: Icon(
-                  Icons.bedtime_outlined,
-                  color: timer == null ? _muted : _green,
-                  size: 21,
+              Tooltip(
+                message: timerActive ? _sleepTimerSummary(controller) : '睡眠定时',
+                child: TextButton.icon(
+                  key: const Key('sleep-timer-open'),
+                  onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (_) => _SleepTimerDialog(controller: controller),
+                  ),
+                  icon: Icon(
+                    Icons.bedtime_outlined,
+                    color: timerActive ? _green : _muted,
+                    size: 20,
+                  ),
+                  label: Text(
+                    timerMode == SleepTimerMode.endOfTrack
+                        ? '本曲结束'
+                        : timer == null
+                        ? '定时'
+                        : _formatTime(timer),
+                    style: const TextStyle(fontSize: 12),
+                  ),
                 ),
               ),
-              if (timer != null)
+              if (timerActive)
                 IconButton(
                   key: const Key('sleep-timer-cancel'),
-                  tooltip: '取消定时（剩余 ${_formatTime(timer)}）',
+                  tooltip: '取消定时',
                   onPressed: controller.cancelSleepTimer,
                   icon: const Icon(Icons.timer_off_outlined, size: 20),
                 ),

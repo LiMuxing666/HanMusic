@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:get/get.dart';
 
 import '../data/models/play_mode.dart';
+import '../data/models/playback_guard.dart';
 import '../data/models/song.dart';
 import '../data/sources/audio_backend.dart';
 
@@ -13,18 +14,25 @@ class PlayerService extends GetxService {
       _backend.states.listen((state) {
         if (_disposed) return;
         final newlyCompleted = state.completed && !_completed;
-        _completed = state.completed;
+        _completed =
+            state.completed || (_completed && !state.playing && !state.loading);
+        if (state.completed && duration.value > Duration.zero) {
+          position.value = duration.value;
+        }
         isPlaying.value =
             state.playing &&
             !state.completed &&
             _loaded.value &&
             _wantsPlayback;
-        if (newlyCompleted && _loaded.value && _wantsPlayback) {
+        if (newlyCompleted &&
+            _loaded.value &&
+            _wantsPlayback &&
+            !_pauseForGuard(PlaybackBoundary.completion)) {
           _scheduleAdvance();
         }
       }),
       _backend.positions.listen((value) {
-        if (!_disposed && !isLoading.value && _loaded.value) {
+        if (!_disposed && !isLoading.value && _loaded.value && !_completed) {
           position.value = value;
         }
       }),
@@ -67,7 +75,30 @@ class PlayerService extends GetxService {
   int _loadGeneration = 0;
   Future<void> _selectionTail = Future<void>.value();
   Future<void>? _errorPause;
+  Future<void>? _pauseInFlight;
+  PlaybackGuard? _playbackGuard;
   int _errorPauseGeneration = 0;
+
+  void attachPlaybackGuard(PlaybackGuard guard) => _playbackGuard = guard;
+
+  void detachPlaybackGuard(PlaybackGuard guard) {
+    if (identical(_playbackGuard, guard)) _playbackGuard = null;
+  }
+
+  bool _pauseForGuard(PlaybackBoundary boundary) {
+    if (_playbackGuard?.shouldPause(boundary, currentSong.value?.id) != true) {
+      return false;
+    }
+    ++_playIntent;
+    _wantsPlayback = false;
+    isPlaying.value = false;
+    return true;
+  }
+
+  void _manualSelection(String? id) {
+    _playbackGuard?.onManualSelection(id);
+    _playbackGuard?.onManualPlayback();
+  }
 
   int get currentIndex =>
       queue.indexWhere((song) => song.id == currentSong.value?.id);
@@ -93,6 +124,7 @@ class PlayerService extends GetxService {
     final selectedId = songs.isEmpty
         ? null
         : songs[startIndex.clamp(0, songs.length - 1)].id;
+    _manualSelection(selectedId);
     queue.assignAll(_unique(songs));
     _resetNavigation();
     _failedIds.clear();
@@ -117,6 +149,7 @@ class PlayerService extends GetxService {
 
   Future<void> playAt(int index) async {
     if (_disposed || index < 0 || index >= queue.length) return;
+    _manualSelection(queue[index].id);
     _failedIds.clear();
     final intent = ++_playIntent;
     _wantsPlayback = true;
@@ -128,6 +161,7 @@ class PlayerService extends GetxService {
     if (_disposed || queue.isEmpty) return;
     final id = _nextId(completion: false);
     if (id == null) return;
+    _manualSelection(id);
     _failedIds.clear();
     final intent = ++_playIntent;
     _wantsPlayback = true;
@@ -145,6 +179,7 @@ class PlayerService extends GetxService {
       final index = currentIndex < 0 ? 0 : currentIndex;
       id = queue[(index - 1 + queue.length) % queue.length].id;
     }
+    _manualSelection(id);
     _failedIds.clear();
     final intent = ++_playIntent;
     _wantsPlayback = true;
@@ -173,6 +208,10 @@ class PlayerService extends GetxService {
     final removedIndex = queue.indexWhere((song) => song.id == id);
     if (removedIndex < 0) return;
     final wasCurrent = currentSong.value?.id == id;
+    if (wasCurrent) {
+      _playbackGuard?.onManualSelection(null);
+      _pauseForGuard(PlaybackBoundary.beforePlay);
+    }
     final shouldPlay = _wantsPlayback;
     queue.removeAt(removedIndex);
     _pruneNavigation();
@@ -219,6 +258,7 @@ class PlayerService extends GetxService {
     bool skipOnError = true,
   }) async {
     if (_disposed) return;
+    _playbackGuard?.onManualSelection(null);
     ++_playIntent;
     final request = ++_selectionGeneration;
     ++_loadGeneration;
@@ -264,7 +304,6 @@ class PlayerService extends GetxService {
     final request = ++_selectionGeneration;
     ++_loadGeneration;
     _restored = false;
-    _loaded.value = false;
     isLoading.value = true;
     isPlaying.value = false;
     final work = _selectionTail.then((_) async {
@@ -276,6 +315,10 @@ class PlayerService extends GetxService {
         );
         for (final candidateId in candidates) {
           if (!_active(request)) return;
+          if ((automatic || candidateId != id) &&
+              _pauseForGuard(PlaybackBoundary.beforePlay)) {
+            return;
+          }
           final index = queue.indexWhere((song) => song.id == candidateId);
           if (index < 0 || _failedIds.contains(candidateId)) continue;
           final song = queue[index];
@@ -327,10 +370,12 @@ class PlayerService extends GetxService {
         _active(request) ? _LoadResult.failed : _LoadResult.cancelled;
     try {
       if (_errorPause case final pending?) await pending;
+      if (_pauseInFlight case final pending?) await pending;
       if (!valid()) return invalidResult();
       await _backend.pause();
       if (!valid()) return invalidResult();
       if (song.isMissing) {
+        _pauseForGuard(PlaybackBoundary.error);
         errorMessage.value = '文件已丢失：${song.fileName}';
         return _LoadResult.failed;
       }
@@ -348,13 +393,19 @@ class PlayerService extends GetxService {
         if (!valid()) return invalidResult();
         position.value = target;
       }
-      if (autoplay && _wantsPlayback && intent == _playIntent) {
+      if (_pauseInFlight case final pending?) await pending;
+      if (!valid()) return invalidResult();
+      if (autoplay &&
+          _wantsPlayback &&
+          intent == _playIntent &&
+          !_pauseForGuard(PlaybackBoundary.beforePlay)) {
         await _backend.play();
         if (!valid()) return invalidResult();
       }
       return _LoadResult.loaded;
     } catch (_) {
       if (!_active(request)) return _LoadResult.cancelled;
+      _pauseForGuard(PlaybackBoundary.error);
       _loaded.value = false;
       isPlaying.value = false;
       errorMessage.value = '无法播放此文件，请检查文件是否损坏或已被移动。';
@@ -373,6 +424,7 @@ class PlayerService extends GetxService {
 
   void _handleBackendError(Object error) {
     if (_disposed) return;
+    _pauseForGuard(PlaybackBoundary.error);
     _errorPauseGeneration = ++_loadGeneration;
     final id = currentSong.value?.id;
     if (id != null) _failedIds.add(id);
@@ -418,6 +470,11 @@ class PlayerService extends GetxService {
           intent != _playIntent ||
           !_wantsPlayback ||
           currentSong.value?.id != sourceId) {
+        return;
+      }
+      if (_pauseForGuard(
+        fromError ? PlaybackBoundary.error : PlaybackBoundary.completion,
+      )) {
         return;
       }
       final id = _nextId(completion: true, skipRepeatOne: fromError);
@@ -528,6 +585,7 @@ class PlayerService extends GetxService {
         await pause();
         return;
       }
+      _playbackGuard?.onManualPlayback();
       final intent = ++_playIntent;
       _wantsPlayback = true;
       if (_restored) {
@@ -540,13 +598,23 @@ class PlayerService extends GetxService {
         return;
       }
       final generation = _loadGeneration;
+      if (_errorPause case final pending?) await pending;
+      if (_pauseInFlight case final pending?) await pending;
+      if (_disposed || intent != _playIntent || generation != _loadGeneration) {
+        return;
+      }
+      if (_pauseForGuard(PlaybackBoundary.beforePlay)) return;
       if (_completed) {
-        await _backend.seek(Duration.zero);
         _completed = false;
+        await _backend.seek(Duration.zero);
+        if (!_disposed && generation == _loadGeneration) {
+          position.value = Duration.zero;
+        }
       }
       if (!_disposed &&
           intent == _playIntent &&
-          generation == _loadGeneration) {
+          generation == _loadGeneration &&
+          !_pauseForGuard(PlaybackBoundary.beforePlay)) {
         await _backend.play();
       }
     } catch (error) {
@@ -560,11 +628,19 @@ class PlayerService extends GetxService {
     if (_disposed) return;
     _playIntent++;
     _wantsPlayback = false;
+    final previousPause = _pauseInFlight;
+    final completion = Completer<void>();
+    _pauseInFlight = completion.future;
     try {
+      if (previousPause != null) await previousPause;
+      if (_disposed) return;
       await _backend.pause();
       if (!_disposed) isPlaying.value = false;
     } catch (_) {
       if (!_disposed) errorMessage.value = '未能暂停播放，请关闭应用以停止音频。';
+    } finally {
+      if (identical(_pauseInFlight, completion.future)) _pauseInFlight = null;
+      completion.complete();
     }
   }
 
@@ -578,6 +654,7 @@ class PlayerService extends GetxService {
     final target = _clampPosition(value);
     final generation = _loadGeneration;
     try {
+      _completed = false;
       await _backend.seek(target);
       if (!_disposed && generation == _loadGeneration) position.value = target;
     } catch (_) {
@@ -618,6 +695,7 @@ class PlayerService extends GetxService {
   }
 
   Future<void> _clearSelection() async {
+    _playbackGuard?.onManualSelection(null);
     final request = ++_selectionGeneration;
     ++_loadGeneration;
     ++_playIntent;

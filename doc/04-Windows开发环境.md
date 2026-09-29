@@ -28,7 +28,9 @@
 
 Flutter 3.41.9 与仓库 `.metadata` 中的 revision `00b0c91f06209d9e4a41f71b7a512d6eb3b9c694` 一致，内置 Dart 3.11.5 满足项目的 `^3.11.5` 要求。
 
-本轮功能、测试数量、原生探针和性能结果统一见 [Windows M2 验证记录](./07-Windows-M2验证记录.md)。M2 核心实现完成，系统 UI 待验收；原生音频测试与 Flutter 渲染预览不能替代文件对话框和窗口操作。
+曲库阶段的功能、测试数量、原生探针和性能结果见 [Windows M2 验证记录](./07-Windows-M2验证记录.md)。M2 核心实现完成，系统 UI 待验收；原生音频测试与 Flutter 渲染预览不能替代文件对话框和窗口操作。
+
+M3 在同一环境继续实现完整睡眠定时和 Windows 恢复通知，没有安装新的 SDK 或新增第三方依赖。最新测试/构建结果及真实休眠验收缺口见 [Windows M3 验证记录](./08-Windows-M3验证记录.md)。本机 `HANMUSIC_DATA_DIR`、缓存和 `idea.properties` 的 D 盘配置保持不变。
 
 Windows 插件构建会使用符号链接。用户开启开发者模式后，已复核 `AllowDevelopmentWithoutDevLicense=1`，并成功创建 `D:\dev\tmp\hanmusic-native-plugin-symlink-check`（LinkType 为 SymbolicLink，目标为 D 盘 Pub 缓存）。随后完成了带原生音频插件的 Windows Release 构建，M0 环境收尾完成。
 
