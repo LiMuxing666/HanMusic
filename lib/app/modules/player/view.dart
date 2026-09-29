@@ -17,14 +17,22 @@ const _muted = Color(0xFF738077);
 const _green = Color(0xFF256747);
 
 class PlayerPage extends StatelessWidget {
-  const PlayerPage({super.key, required this.controller});
+  const PlayerPage({
+    super.key,
+    required this.controller,
+    this.libraryScrollController,
+  });
 
   final PlayerController controller;
+  final ScrollController? libraryScrollController;
 
   @override
   Widget build(BuildContext context) {
     if (controller.hasLibrary) {
-      return _LibraryPlayerPage(controller: controller);
+      return _LibraryPlayerPage(
+        controller: controller,
+        libraryScrollController: libraryScrollController,
+      );
     }
     return Scaffold(
       body: SafeArea(
@@ -168,12 +176,16 @@ class _Sidebar extends StatelessWidget {
                     ),
                     if (!compact) ...[
                       const SizedBox(width: 12),
-                      const Text(
-                        '本地播放',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
+                      const Expanded(
+                        child: Text(
+                          '本地播放',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
                     ],
@@ -213,9 +225,13 @@ class _Sidebar extends StatelessWidget {
                 ),
                 if (!compact) ...[
                   const SizedBox(width: 10),
-                  const Text(
-                    'Windows 版',
-                    style: TextStyle(color: Color(0xFF92B3A0), fontSize: 12),
+                  const Expanded(
+                    child: Text(
+                      'Windows 版',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: Color(0xFF92B3A0), fontSize: 12),
+                    ),
                   ),
                 ],
               ],

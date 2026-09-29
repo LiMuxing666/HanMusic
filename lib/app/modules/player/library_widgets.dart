@@ -1,8 +1,12 @@
 part of 'view.dart';
 
 class _LibraryPlayerPage extends StatefulWidget {
-  const _LibraryPlayerPage({required this.controller});
+  const _LibraryPlayerPage({
+    required this.controller,
+    this.libraryScrollController,
+  });
   final PlayerController controller;
+  final ScrollController? libraryScrollController;
 
   @override
   State<_LibraryPlayerPage> createState() => _LibraryPlayerPageState();
@@ -93,7 +97,11 @@ class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
                                 ),
                                 2 => _QueueView(controller: controller),
                                 3 => OnlineMusicPage(controller: _online!),
-                                _ => _LibraryView(controller: controller),
+                                _ => _LibraryView(
+                                  controller: controller,
+                                  scrollController:
+                                      widget.libraryScrollController,
+                                ),
                               },
                             ),
                           ],
@@ -300,8 +308,9 @@ class _LibraryHeader extends StatelessWidget {
 }
 
 class _LibraryView extends StatelessWidget {
-  const _LibraryView({required this.controller});
+  const _LibraryView({required this.controller, this.scrollController});
   final PlayerController controller;
+  final ScrollController? scrollController;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -383,19 +392,28 @@ class _LibraryView extends StatelessWidget {
               onImport: controller.importFile,
             );
           }
-          final largeText = MediaQuery.textScalerOf(context).scale(14) > 18;
-          return ListView.builder(
-            key: const Key('library-list'),
-            itemCount: songs.length,
-            itemExtent: largeText ? 96 : 78,
-            padding: const EdgeInsets.only(bottom: 14),
-            itemBuilder: (context, index) => _LibrarySongRow(
-              song: songs[index],
-              current: currentId == songs[index].id,
-              onPlay: () => controller.playLibrarySong(songs[index]),
-              onQueue: () => controller.addToQueue(songs[index]),
-              onRemove: () =>
-                  _confirmLibraryRemoval(context, controller, songs[index]),
+          final textScale = MediaQuery.textScalerOf(context).scale(14) / 14;
+          final rowExtent = 78 + (textScale - 1).clamp(0.0, 4.0) * 36;
+          return LayoutBuilder(
+            builder: (context, bounds) => ListView.builder(
+              key: const Key('library-list'),
+              controller: scrollController,
+              itemCount: songs.length,
+              itemExtent: rowExtent,
+              // High-speed jumps replace the whole viewport. Limit discarded
+              // offscreen work to one row on each side; rows hold no draft state.
+              cacheExtent: rowExtent,
+              addAutomaticKeepAlives: false,
+              padding: const EdgeInsets.only(bottom: 14),
+              itemBuilder: (context, index) => _LibrarySongRow(
+                song: songs[index],
+                current: currentId == songs[index].id,
+                wide: bounds.maxWidth >= 850,
+                onPlay: () => controller.playLibrarySong(songs[index]),
+                onQueue: () => controller.addToQueue(songs[index]),
+                onRemove: () =>
+                    _confirmLibraryRemoval(context, controller, songs[index]),
+              ),
             ),
           );
         }),
@@ -456,133 +474,128 @@ class _LibrarySongRow extends StatelessWidget {
   const _LibrarySongRow({
     required this.song,
     required this.current,
+    required this.wide,
     required this.onPlay,
     required this.onQueue,
     required this.onRemove,
   });
   final Song song;
   final bool current;
+  final bool wide;
   final VoidCallback onPlay;
   final VoidCallback onQueue;
   final VoidCallback onRemove;
 
   @override
-  Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, bounds) {
-      final wide = bounds.maxWidth >= 850;
-      final artist = song.artist?.trim().isNotEmpty == true
-          ? song.artist!
-          : '未知歌手';
-      final album = song.album?.trim().isNotEmpty == true
-          ? song.album!
-          : '未知专辑';
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Material(
-          color: current
-              ? const Color(0xFFE7F0E2)
-              : Theme.of(context).colorScheme.surface,
+  Widget build(BuildContext context) {
+    final artist = song.artist?.trim().isNotEmpty == true
+        ? song.artist!
+        : '未知歌手';
+    final album = song.album?.trim().isNotEmpty == true ? song.album! : '未知专辑';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Material(
+        color: current
+            ? const Color(0xFFE7F0E2)
+            : Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          key: ValueKey('library-song-${song.id}'),
           borderRadius: BorderRadius.circular(12),
-          child: InkWell(
-            key: ValueKey('library-song-${song.id}'),
-            borderRadius: BorderRadius.circular(12),
-            onTap: song.isMissing ? null : onPlay,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              child: Row(
-                children: [
-                  Opacity(
-                    opacity: song.isMissing ? .45 : 1,
-                    child: _SongThumbnail(song: song),
+          onTap: song.isMissing ? null : onPlay,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            child: Row(
+              children: [
+                Opacity(
+                  opacity: song.isMissing ? .45 : 1,
+                  child: _SongThumbnail(song: song),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 4,
+                  child: Opacity(
+                    opacity: song.isMissing ? .5 : 1,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          song.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontWeight: current
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                            color: current ? _green : null,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          song.isMissing
+                              ? '文件缺失 · 可检查或移除索引'
+                              : wide
+                              ? song.fileName
+                              : '$artist · $album',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12, color: _muted),
+                        ),
+                      ],
+                    ),
                   ),
-                  const SizedBox(width: 12),
+                ),
+                if (wide) ...[
+                  const SizedBox(width: 16),
                   Expanded(
-                    flex: 4,
-                    child: Opacity(
-                      opacity: song.isMissing ? .5 : 1,
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            song.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontWeight: current
-                                  ? FontWeight.w700
-                                  : FontWeight.w500,
-                              color: current ? _green : null,
-                            ),
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            song.isMissing
-                                ? '文件缺失 · 可检查或移除索引'
-                                : wide
-                                ? song.fileName
-                                : '$artist · $album',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 12, color: _muted),
-                          ),
-                        ],
-                      ),
+                    flex: 2,
+                    child: Text(
+                      artist,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: _muted, fontSize: 13),
                     ),
                   ),
-                  if (wide) ...[
-                    const SizedBox(width: 16),
-                    Expanded(
-                      flex: 2,
-                      child: Text(
-                        artist,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _muted, fontSize: 13),
-                      ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    flex: 2,
+                    child: Text(
+                      album,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: _muted, fontSize: 13),
                     ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      flex: 2,
-                      child: Text(
-                        album,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _muted, fontSize: 13),
-                      ),
-                    ),
-                  ],
-                  const SizedBox(width: 10),
-                  Text(
-                    song.duration == null
-                        ? '--:--'
-                        : _formatTime(song.duration!),
-                    style: const TextStyle(color: _muted, fontSize: 12),
-                  ),
-                  PopupMenuButton<String>(
-                    tooltip: '${song.title}的操作',
-                    onSelected: (value) =>
-                        value == 'queue' ? onQueue() : onRemove(),
-                    itemBuilder: (_) => [
-                      PopupMenuItem(
-                        value: 'queue',
-                        enabled: !song.isMissing,
-                        child: const Text('加入播放队列'),
-                      ),
-                      const PopupMenuItem(
-                        value: 'remove',
-                        child: Text('从曲库移除（保留文件）'),
-                      ),
-                    ],
                   ),
                 ],
-              ),
+                const SizedBox(width: 10),
+                Text(
+                  song.duration == null ? '--:--' : _formatTime(song.duration!),
+                  style: const TextStyle(color: _muted, fontSize: 12),
+                ),
+                PopupMenuButton<String>(
+                  tooltip: '${song.title}的操作',
+                  onSelected: (value) =>
+                      value == 'queue' ? onQueue() : onRemove(),
+                  itemBuilder: (_) => [
+                    PopupMenuItem(
+                      value: 'queue',
+                      enabled: !song.isMissing,
+                      child: const Text('加入播放队列'),
+                    ),
+                    const PopupMenuItem(
+                      value: 'remove',
+                      child: Text('从曲库移除（保留文件）'),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         ),
-      );
-    },
-  );
+      ),
+    );
+  }
 }
 
 class _SongThumbnail extends StatelessWidget {
@@ -678,12 +691,12 @@ class _QueueView extends StatelessWidget {
               ),
             );
           }
-          final largeText = MediaQuery.textScalerOf(context).scale(14) > 18;
+          final textScale = MediaQuery.textScalerOf(context).scale(14) / 14;
           return ReorderableListView.builder(
             key: const Key('queue-list'),
             buildDefaultDragHandles: false,
             itemCount: queue.length,
-            itemExtent: largeText ? 92 : 76,
+            itemExtent: 76 + (textScale - 1).clamp(0.0, 4.0) * 32,
             onReorder: controller.reorderQueue,
             itemBuilder: (context, index) {
               final song = queue[index];

@@ -153,6 +153,8 @@ void main() {
     (size: const Size(1280, 720), scale: 1.0),
     (size: const Size(800, 600), scale: 1.0),
     (size: const Size(800, 600), scale: 1.5),
+    (size: const Size(1280, 720), scale: 2.0),
+    (size: const Size(800, 600), scale: 2.0),
   ]) {
     testWidgets(
       'library, queue and fixed controls fit ${configuration.size} scale ${configuration.scale}',
@@ -180,6 +182,68 @@ void main() {
             expect(tester.takeException(), isNull);
             await tester.tap(find.byKey(const Key('nav-1')));
             await tester.pumpAndSettle();
+            expect(tester.takeException(), isNull);
+          },
+        );
+      },
+    );
+  }
+
+  for (final scale in [1.0, 2.0]) {
+    testWidgets(
+      'long jumps bound materialized rows and preserve extent at $scale',
+      (tester) async {
+        await _withPlayer(
+          tester,
+          withLibrary: true,
+          textScale: scale,
+          run: (fixture) async {
+            fixture.library!.replaceAll(_librarySongs(10000));
+            await tester.pumpAndSettle();
+            final list = find.byKey(const Key('library-list'));
+            final scrollable = find.descendant(
+              of: list,
+              matching: find.byType(Scrollable),
+            );
+            final position = tester.state<ScrollableState>(scrollable).position;
+            final extent = tester.widget<ListView>(list).itemExtent!;
+            final visibleRows = (position.viewportDimension / extent).ceil();
+            final rows = find.byWidgetPredicate(
+              (widget) =>
+                  widget.key is ValueKey<String> &&
+                  (widget.key! as ValueKey<String>).value.startsWith(
+                    'library-song-',
+                  ),
+            );
+            for (final fraction in [.9, .1, .8, .2, 1.0, 0.0]) {
+              position.jumpTo(position.maxScrollExtent * fraction);
+              await tester.pumpAndSettle();
+              // At most a partial edge row plus one prefetched row per side.
+              expect(
+                rows.evaluate().length,
+                lessThanOrEqualTo(visibleRows + 4),
+              );
+              final built = rows
+                  .evaluate()
+                  .take(2)
+                  .map((element) => find.byWidget(element.widget))
+                  .toList();
+              expect(
+                (tester.getRect(built[1]).top - tester.getRect(built[0]).top)
+                    .abs(),
+                closeTo(extent, .01),
+              );
+              expect(_playButton.hitTestable(), findsOneWidget);
+              expect(tester.takeException(), isNull);
+            }
+            await tester.tap(find.byTooltip('测试曲目 00000的操作'));
+            await tester.pumpAndSettle();
+            await tester.tap(find.text('加入播放队列'));
+            await tester.pumpAndSettle();
+            expect(
+              fixture.player.queue.single.id,
+              fixture.library!.songs.first.id,
+            );
             expect(tester.takeException(), isNull);
           },
         );
@@ -278,6 +342,8 @@ void main() {
     (size: const Size(1280, 720), scale: 1.0),
     (size: const Size(800, 600), scale: 1.0),
     (size: const Size(800, 600), scale: 1.5),
+    (size: const Size(1280, 720), scale: 2.0),
+    (size: const Size(800, 600), scale: 2.0),
   ]) {
     testWidgets(
       'empty and loaded layout ${configuration.size} at ${configuration.scale} text scale',

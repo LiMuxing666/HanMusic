@@ -89,13 +89,11 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.han.music" "\0"
-            VALUE "FileDescription", "han_music" "\0"
+            VALUE "FileDescription", "HanMusic Windows development preview" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "han_music" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.han.music. All rights reserved." "\0"
             VALUE "OriginalFilename", "han_music.exe" "\0"
-            VALUE "ProductName", "han_music" "\0"
+            VALUE "ProductName", "HanMusic" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

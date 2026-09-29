@@ -1,0 +1,3 @@
+# Preserve the audited upstream license bytes and their recorded SHA-256.
+doc/licenses/*.txt -text
+doc/licenses/FFmpeg-LICENSE-n6.0.md -text

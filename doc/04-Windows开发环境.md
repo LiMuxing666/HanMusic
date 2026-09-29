@@ -20,9 +20,9 @@
 | Windows 开发者模式 | 用户已开启 | 注册表值为 1，真实 SymbolicLink 创建成功，原生音频插件 Release 构建通过 |
 | `flutter doctor -v` | Flutter / Windows / Visual Studio / Network | 均通过；唯一 Android SDK 警告不影响 Windows 开发 |
 | `flutter pub get --enforce-lockfile` | 依赖与锁文件 | M2 新增元数据、路径及摘要依赖，已更新锁文件；Pub 缓存仍配置在 D 盘 |
-| `flutter analyze --no-pub lib test tool` | 应用、测试和诊断入口 | M1 历史基线通过；本轮 M2 完整结果见验证记录 |
-| `flutter test --no-pub` | 音乐业务测试 | M1 历史基线 43 项通过；M2 最终数量与结果见验证记录，不沿用旧数量 |
-| Windows Release 构建 | 从英文目录入口构建 | M1 构建通过；M2 构建结果见验证记录，输出仍为 `build\windows\x64\runner\Release` |
+| `flutter analyze --no-pub lib test tool` | 应用、测试和诊断入口 | M5 最终检查无问题，22.7 秒；完整日志见阶段验证记录 |
+| `flutter test --no-pub --reporter expanded` | 音乐业务测试 | M5 最终全量 231 项通过；不包含独立原生探针和万文件 benchmark |
+| Windows Release 构建 | 从英文目录入口构建 | M5 正常入口 Release 构建及预览 ZIP 完整性/短时进程检查通过；输出仍为 `build\windows\x64\runner\Release`，范围见阶段记录 |
 | 应用启动与系统 UI | 原生文件对话框、窗口最小化/恢复及关闭 | 历史启动检查不等于系统交互验收；这些项目仍待实机验收 |
 | M2 应用数据 | `HANMUSIC_DATA_DIR=D:\dev\data\HanMusic` | 已加入本机环境脚本和 VS Code 环境配置，存储曲库/队列状态与封面缓存 |
 
@@ -133,6 +133,12 @@ flutter run -d windows
 构建产物位于 `D:\project\HanMusic\build\windows\x64\runner\Release`。运行或分发时需保留整个目录中的 DLL 和 `data`，不能只拷贝 EXE。当前已实现 M1–M4 核心；最新网络能力与验收边界见 [M4 验证记录](./10-Windows-M4验证记录.md)，后端历史验证见 [M1 验证记录](./06-Windows-M1验证记录.md)。使用 `-t tool/...` 构建诊断入口会覆盖同一个输出目录，交付前必须重新构建默认 `lib/main.dart`。
 
 M4 网络源配置和备份位于 `D:\dev\data\HanMusic\online`；队列仅保存在线歌曲稳定 ID，临时流地址不写入状态文件。诊断服务与探针数据位于 `D:\dev\tmp\hanmusic-m4-probe`，验收记录归档至 `D:\dev\setup\verification\m4`。M4 无新增 SDK 或第三方依赖，Gradle、Pub、IDE 配置仍沿用上述 D 盘设置。
+
+M5 继续沿用这些 SDK/缓存/IDE 目录，没有为验证迁移到 C 盘。万文件、Profile、音频和打包保护证据归档于 `D:\dev\setup\verification\m5`；本机硬件为 i7-13620H、16 逻辑处理器、约 15.73 GiB 可见内存、UMIS NVMe，系统为 Windows 11 Build 26200。测试模式、结果与未达标项见 [M5 阶段验证记录](./13-Windows-M5阶段验证记录.md)，不能据此认定干净 Windows 机器已通过验收。
+
+`tool/package_windows_preview.ps1` 默认将开发预览写入 `D:\dev\releases\HanMusic`，重新构建正常入口并保留完整 Release、NOTICE、许可材料和哈希清单；不要直接打包曾由探针覆盖的 EXE。包内启动器默认把数据放在与 EXE 同目录的 `UserData` 子目录，与开发会话的 `D:\dev\data\HanMusic` 分开；保持 D 盘数据时应将预览解压到 D 盘或按 [预览运行说明](./12-Windows预览运行与验收.md) 指定绝对目录。
+
+当前 Windows JNI DLL 由传递依赖生成，应按完整 Release 保留，不能仅凭该文件推导用户必须安装 JRE；本轮预览不捆绑 JRE 或 VC++ 运行库。VC++ 运行条件、原生许可证和项目自身授权缺口见 [分发检查](./11-Windows依赖与分发检查.md)。M5 原生音频两阶段与全量测试已完成；正常入口预览 ZIP 已通过本机哈希、完整清单及系统 PowerShell 启动器的短时进程检查，详见阶段记录第 8 节。强制结束测试进程不算正常关窗，系统交互、干净机与公开发行条件仍待完成。
 
 模板基线验证摘要见 `D:\dev\setup\verification\result.json`，启动检查见 `launch.json`，成功构建日志见 `build-windows-ascii-path.txt`。此前中文路径失败的日志保留为 `build-windows.txt`。这些历史记录不替代当前音乐业务验证。
 

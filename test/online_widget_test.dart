@@ -20,6 +20,75 @@ import 'support/fake_audio_backend.dart';
 import 'support/fake_online_music.dart';
 
 void main() {
+  for (final size in [const Size(1280, 720), const Size(800, 600)]) {
+    testWidgets('200 percent online states and dialogs fit $size', (
+      tester,
+    ) async {
+      await _withOnline(
+        tester,
+        size: size,
+        scale: 2,
+        run: (fixture) async {
+          expect(_play.hitTestable(), findsOneWidget);
+          expect(tester.takeException(), isNull);
+          final gate = Completer<OnlineSearchPage>();
+          fixture.repository.gates['加载状态'] = gate;
+          await tester.enterText(find.byKey(const Key('online-query')), '加载状态');
+          await tester.pump(const Duration(milliseconds: 500));
+          await tester.pump();
+          expect(find.text('正在搜索…'), findsOneWidget);
+          expect(tester.takeException(), isNull);
+          gate.complete(
+            OnlineSearchPage(
+              songs: [
+                Song.online(
+                  sourceId: 'demo',
+                  trackId: 'loaded',
+                  title: '200% 字号测试歌曲',
+                  artist: '示例歌手',
+                ),
+              ],
+              hasMore: false,
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+          await tester.tap(find.text('200% 字号测试歌曲'));
+          await tester.pumpAndSettle();
+          expect(_play.hitTestable(), findsOneWidget);
+          await tester.tap(find.byKey(const Key('sleep-timer-open')));
+          await tester.pumpAndSettle();
+          expect(
+            find.byKey(const Key('sleep-timer-confirm')).hitTestable(),
+            findsOneWidget,
+          );
+          expect(tester.takeException(), isNull);
+          await tester.tap(find.text('暂不设置'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.byKey(const Key('online-add-source')));
+          await tester.pumpAndSettle();
+          await tester.ensureVisible(
+            find.byKey(const Key('online-test-query')),
+          );
+          await tester.pumpAndSettle();
+          expect(
+            find.byKey(const Key('online-source-save')).hitTestable(),
+            findsOneWidget,
+          );
+          expect(tester.takeException(), isNull);
+          await tester.tap(find.text('取消'));
+          await tester.pumpAndSettle();
+          fixture.repository.failure = '音乐源暂时不可用，请检查配置后重试。';
+          await fixture.online.searchNow('错误状态');
+          await tester.pumpAndSettle();
+          expect(find.text('重试').hitTestable(), findsOneWidget);
+          expect(_play.hitTestable(), findsOneWidget);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    });
+  }
+
   testWidgets(
     'source picker selects the requested source and refreshes result context',
     (tester) async {
