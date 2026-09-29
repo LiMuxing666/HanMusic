@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:han_music/app/core/theme/app_theme.dart';
 import 'package:han_music/app/data/models/song.dart';
@@ -324,6 +325,99 @@ void main() {
     );
   }
 
+  for (final configuration in [
+    (size: const Size(1280, 720), scale: 1.0),
+    (size: const Size(800, 600), scale: 2.0),
+  ]) {
+    testWidgets(
+      'Windows keyboard paging retains focus without retaining the library at ${configuration.size} scale ${configuration.scale}',
+      (tester) async {
+        await _withPlayer(
+          tester,
+          withLibrary: true,
+          size: configuration.size,
+          textScale: configuration.scale,
+          run: (fixture) async {
+            final songs = _librarySongs(10000);
+            fixture.library!.replaceAll(songs);
+            await fixture.player.open(songs.first);
+            await tester.pumpAndSettle();
+            final list = find.byKey(const Key('library-list'));
+            final scrollable = find.descendant(
+              of: list,
+              matching: find.byType(Scrollable),
+            );
+            final position = tester.state<ScrollableState>(scrollable).position;
+            final extent = tester.widget<ListView>(list).itemExtent!;
+            final viewportRows = (position.viewportDimension / extent).ceil();
+            final firstRow = find.byKey(
+              ValueKey('library-song-${songs.first.id}'),
+              skipOffstage: false,
+            );
+            final rows = find.byWidgetPredicate(
+              (widget) =>
+                  widget.key is ValueKey<String> &&
+                  (widget.key! as ValueKey<String>).value.startsWith(
+                    'library-song-',
+                  ),
+              skipOffstage: false,
+            );
+
+            Future<void> tabTo(Finder target) async {
+              for (var step = 0; step < 100; step++) {
+                await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+                await tester.pumpAndSettle();
+                if (_primaryFocusWithin(target)) return;
+              }
+              fail('Keyboard traversal did not reach $target');
+            }
+
+            await tabTo(firstRow);
+            final rowFocus = FocusManager.instance.primaryFocus;
+            for (final key in [
+              ...List.filled(4, LogicalKeyboardKey.pageDown),
+              ...List.filled(2, LogicalKeyboardKey.pageUp),
+            ]) {
+              final before = position.pixels;
+              await tester.sendKeyEvent(key);
+              await tester.pumpAndSettle();
+              expect(
+                position.pixels,
+                key == LogicalKeyboardKey.pageDown
+                    ? greaterThan(before)
+                    : lessThan(before),
+              );
+              expect(FocusManager.instance.primaryFocus, same(rowFocus));
+              expect(firstRow, findsOneWidget);
+              // Visible rows, at most one partial edge row and the focused row.
+              expect(
+                rows.evaluate().length,
+                lessThanOrEqualTo(viewportRows + 2),
+              );
+              expect(tester.takeException(), isNull);
+            }
+            expect(position.pixels, greaterThan(position.viewportDimension));
+
+            await tabTo(_playButton);
+            expect(_playButton.hitTestable(), findsOneWidget);
+            // Once focus leaves, scrolling away must release the old row rather
+            // than retaining every song that keyboard traversal has visited.
+            position.jumpTo(position.viewportDimension * 8);
+            await tester.pumpAndSettle();
+            expect(firstRow, findsNothing);
+            expect(_primaryFocusWithin(_playButton), isTrue);
+            expect(rows.evaluate().length, lessThanOrEqualTo(viewportRows + 1));
+            await tester.sendKeyEvent(LogicalKeyboardKey.space);
+            await tester.pumpAndSettle();
+            expect(fixture.player.isPlaying.value, isFalse);
+            expect(tester.takeException(), isNull);
+          },
+        );
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+  }
+
   testWidgets('ten thousand songs are virtualized and searchable by metadata', (
     tester,
   ) async {
@@ -626,6 +720,18 @@ void main() {
 final _importButton = find.byKey(const Key('import-file'));
 final _playButton = find.byKey(const Key('toggle-playback'));
 final _timerButton = find.byKey(const Key('sleep-timer-open'));
+
+bool _primaryFocusWithin(Finder finder) {
+  final candidates = finder.evaluate().toSet();
+  final context = FocusManager.instance.primaryFocus?.context;
+  if (context is! Element) return false;
+  var found = candidates.contains(context);
+  context.visitAncestorElements((element) {
+    found = found || candidates.contains(element);
+    return !found;
+  });
+  return found;
+}
 
 Future<void> _withPlayer(
   WidgetTester tester, {

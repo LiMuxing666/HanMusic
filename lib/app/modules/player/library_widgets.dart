@@ -400,10 +400,11 @@ class _LibraryView extends StatelessWidget {
               controller: scrollController,
               itemCount: songs.length,
               itemExtent: rowExtent,
-              // Build rows as they enter the viewport. Avoid text layout for
-              // offscreen rows discarded by fast scrolling; rows hold no draft.
+              // Build rows as they enter the viewport, without offscreen layout.
               cacheExtent: 0,
-              addAutomaticKeepAlives: false,
+              // InkWell requests keep-alive only for active ink/focus, allowing
+              // keyboard paging to retain its focused row until focus leaves.
+              addAutomaticKeepAlives: true,
               padding: const EdgeInsets.only(bottom: 14),
               itemBuilder: (context, index) => _LibrarySongRow(
                 song: songs[index],
