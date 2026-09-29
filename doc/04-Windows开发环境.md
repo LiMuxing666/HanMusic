@@ -17,17 +17,17 @@
 | Windows SDK | 10.0.22621.0 | 已发现 |
 | VS Code | `D:\Microsoft VS Code` | 已有安装，已准备本项目专用启动器 |
 | VS Code Flutter / Dart 插件 | `D:\dev\vscode\extensions`，均为 3.142.0 | 已安装，扩展列表已验证 |
-| Windows 开发者模式 | 尚未开启 | 符号链接测试提示需要管理员权限，待用户手动开启 |
+| Windows 开发者模式 | 用户已开启 | 注册表值为 1，真实 SymbolicLink 创建成功，原生音频插件 Release 构建通过 |
 | `flutter doctor -v` | Flutter / Windows / Visual Studio / Network | 均通过；唯一 Android SDK 警告不影响 Windows 开发 |
-| `flutter pub get --enforce-lockfile` | 保留现有锁文件 | 通过；24 个外部依赖包均在 D 盘，未引用 C 盘包 |
-| `flutter analyze` | 当前项目 | 通过 |
-| `flutter test` | 当前项目现有测试 | 1 个 widget test 通过 |
+| `flutter pub get --enforce-lockfile` | 依赖与锁文件 | M1 新增依赖同步更新锁文件；package_config 的 85 个外部包均不引用 C 盘，缓存仍在 D 盘 |
+| `flutter analyze --no-pub lib test tool` | M1 应用、测试和诊断入口 | 通过，无问题 |
+| `flutter test --no-pub` | M1 音乐业务测试 | 43 项通过，已替换原计数器测试 |
 | Windows Release 构建 | 从英文目录入口构建 | 通过，生成 `build\windows\x64\runner\Release\han_music.exe` |
 | 应用启动冒烟检查 | 启动 Release 程序并观察 8 秒 | 进程未提前退出，随后关闭；未进行界面交互验收 |
 
 Flutter 3.41.9 与仓库 `.metadata` 中的 revision `00b0c91f06209d9e4a41f71b7a512d6eb3b9c694` 一致，内置 Dart 3.11.5 满足项目的 `^3.11.5` 要求。
 
-Windows 插件构建会使用符号链接。本机尝试创建符号链接时失败，提权操作返回“用户取消”，因此不再自动触发 UAC。请在 Windows 设置中搜索“开发者模式”并开启，随后重新执行环境和构建检查。
+Windows 插件构建会使用符号链接。用户开启开发者模式后，已复核 `AllowDevelopmentWithoutDevLicense=1`，并成功创建 `D:\dev\tmp\hanmusic-native-plugin-symlink-check`（LinkType 为 SymbolicLink，目标为 D 盘 Pub 缓存）。随后完成了带原生音频插件的 Windows Release 构建，M0 环境收尾完成。
 
 首次 Windows Release 构建在读取 `app.dill` 时因中文路径乱码失败。已建立 `D:\project\HanMusic` 到 `D:\project\音乐播放器` 的 Junction 目录入口，未复制或移动项目。后续开发统一从英文入口进行；已确认重新生成的 CMake `PROJECT_DIR` 为英文路径，Release 构建通过。Junction 与插件所需的符号链接不同，建立目录入口不代表开发者模式已开启。
 
@@ -48,7 +48,7 @@ Windows 插件构建会使用符号链接。本机尝试创建符号链接时失
 
 `TEMP` / `TMP` 仅由启动脚本设置，不改变其他程序的全局临时目录。项目生成的 `.dart_tool`、`build` 等位于项目自身目录，也在 D 盘。`GRADLE_USER_HOME` 不改变项目内 `.gradle` 的位置；本项目目录在 D 盘，因此项目内缓存仍在 D 盘。
 
-`PUB_HOSTED_URL` 已设置为用户环境变量，也已加入环境脚本及项目 VS Code 的 `dart.env` / `terminal.integrated.env.windows`。原 `pubspec.lock` 使用该源，已通过 `--enforce-lockfile` 验证并保持锁文件不变。
+`PUB_HOSTED_URL` 已设置为用户环境变量，也已加入环境脚本及项目 VS Code 的 `dart.env` / `terminal.integrated.env.windows`。`pubspec.lock` 使用该源；功能开发新增依赖时更新并提交锁文件。
 
 ### idea.properties
 
@@ -120,9 +120,11 @@ flutter run -d windows
 & 'D:\dev\setup\Verify-HanMusic.ps1'
 ```
 
-本次构建产物位于 `D:\project\HanMusic\build\windows\x64\runner\Release`。运行或分发时需保留整个目录中的 DLL 和 `data`，不能只拷贝 EXE。当前程序仍是仓库原有的计数器示例，构建通过不代表音乐功能已经实现。
+构建产物位于 `D:\project\HanMusic\build\windows\x64\runner\Release`。运行或分发时需保留整个目录中的 DLL 和 `data`，不能只拷贝 EXE。当前程序已进入 M1 单曲播放原型开发，音乐功能的验证与限制见 [M1 验证记录](./06-Windows-M1验证记录.md)。使用 `-t tool/...` 构建诊断入口会覆盖同一个输出目录，交付前必须重新构建默认 `lib/main.dart`。
 
-本次验证摘要见 `D:\dev\setup\verification\result.json`，启动检查见 `launch.json`，成功构建日志见 `build-windows-ascii-path.txt`。此前中文路径失败的日志保留为 `build-windows.txt`，便于排查。
+模板基线验证摘要见 `D:\dev\setup\verification\result.json`，启动检查见 `launch.json`，成功构建日志见 `build-windows-ascii-path.txt`。此前中文路径失败的日志保留为 `build-windows.txt`。这些历史记录不替代 M1 音乐业务验证。
+
+M1 合成音频测试工具 `imageio-ffmpeg 0.6.0` 位于 `D:\dev\tools\audio-test`，pip 缓存位于 `D:\dev\cache\pip`，测试音频及结果位于 `D:\dev\tmp\hanmusic-audio-probe`。该工具只生成测试样本，不属于应用运行依赖，不随程序发布。
 
 验收应确认 `flutter doctor -v` 的 Windows 和 Visual Studio 项通过，`flutter devices` 中存在 Windows 设备，并成功执行分析、测试和实际 Windows 构建。仅列出已安装组件不等于构建成功。未配置 Android 工具链的提示应按 Windows 开发范围判断，不必为消除无关提示安装整套 Android 环境。
 
