@@ -1,8 +1,14 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import 'controller.dart';
+import '../../data/models/song.dart';
+import '../../data/models/play_mode.dart';
+
+part 'library_widgets.dart';
 
 const _muted = Color(0xFF738077);
 const _green = Color(0xFF256747);
@@ -14,6 +20,9 @@ class PlayerPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (controller.hasLibrary) {
+      return _LibraryPlayerPage(controller: controller);
+    }
     return Scaffold(
       body: SafeArea(
         child: LayoutBuilder(

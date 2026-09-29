@@ -19,13 +19,16 @@
 | VS Code Flutter / Dart 插件 | `D:\dev\vscode\extensions`，均为 3.142.0 | 已安装，扩展列表已验证 |
 | Windows 开发者模式 | 用户已开启 | 注册表值为 1，真实 SymbolicLink 创建成功，原生音频插件 Release 构建通过 |
 | `flutter doctor -v` | Flutter / Windows / Visual Studio / Network | 均通过；唯一 Android SDK 警告不影响 Windows 开发 |
-| `flutter pub get --enforce-lockfile` | 依赖与锁文件 | M1 新增依赖同步更新锁文件；package_config 的 85 个外部包均不引用 C 盘，缓存仍在 D 盘 |
-| `flutter analyze --no-pub lib test tool` | M1 应用、测试和诊断入口 | 通过，无问题 |
-| `flutter test --no-pub` | M1 音乐业务测试 | 43 项通过，已替换原计数器测试 |
-| Windows Release 构建 | 从英文目录入口构建 | 通过，生成 `build\windows\x64\runner\Release\han_music.exe` |
-| 应用启动冒烟检查 | 启动 Release 程序并观察 8 秒 | 进程未提前退出，随后关闭；未进行界面交互验收 |
+| `flutter pub get --enforce-lockfile` | 依赖与锁文件 | M2 新增元数据、路径及摘要依赖，已更新锁文件；Pub 缓存仍配置在 D 盘 |
+| `flutter analyze --no-pub lib test tool` | 应用、测试和诊断入口 | M1 历史基线通过；本轮 M2 完整结果见验证记录 |
+| `flutter test --no-pub` | 音乐业务测试 | M1 历史基线 43 项通过；M2 最终数量与结果见验证记录，不沿用旧数量 |
+| Windows Release 构建 | 从英文目录入口构建 | M1 构建通过；M2 构建结果见验证记录，输出仍为 `build\windows\x64\runner\Release` |
+| 应用启动与系统 UI | 原生文件对话框、窗口最小化/恢复及关闭 | 历史启动检查不等于系统交互验收；这些项目仍待实机验收 |
+| M2 应用数据 | `HANMUSIC_DATA_DIR=D:\dev\data\HanMusic` | 已加入本机环境脚本和 VS Code 环境配置，存储曲库/队列状态与封面缓存 |
 
 Flutter 3.41.9 与仓库 `.metadata` 中的 revision `00b0c91f06209d9e4a41f71b7a512d6eb3b9c694` 一致，内置 Dart 3.11.5 满足项目的 `^3.11.5` 要求。
+
+本轮功能、测试数量、原生探针和性能结果统一见 [Windows M2 验证记录](./07-Windows-M2验证记录.md)。M2 核心实现完成，系统 UI 待验收；原生音频测试与 Flutter 渲染预览不能替代文件对话框和窗口操作。
 
 Windows 插件构建会使用符号链接。用户开启开发者模式后，已复核 `AllowDevelopmentWithoutDevLicense=1`，并成功创建 `D:\dev\tmp\hanmusic-native-plugin-symlink-check`（LinkType 为 SymbolicLink，目标为 D 盘 Pub 缓存）。随后完成了带原生音频插件的 Windows Release 构建，M0 环境收尾完成。
 
@@ -33,7 +36,7 @@ Windows 插件构建会使用符号链接。用户开启开发者模式后，已
 
 ## 2. D 盘存储约定
 
-以下变量已写入当前用户的环境变量；Flutter 的 `bin` 目录也已加入用户 `PATH`。已有终端和编辑器可能仍保留旧环境，重新打开即可；也可以直接使用下一节的启动脚本。
+以下为本机的环境与目录配置，启动脚本会为开发会话统一加载所需变量；Flutter 的 `bin` 目录已加入用户 `PATH`。已有终端和编辑器可能仍保留旧环境，可重新打开或直接使用下一节的启动脚本。
 
 | 环境变量 / 数据 | 值 / 路径 | 作用 |
 | --- | --- | --- |
@@ -42,6 +45,7 @@ Windows 插件构建会使用符号链接。用户开启开发者模式后，已
 | `PUB_HOSTED_URL` | `https://pub.flutter-io.cn` | 与仓库现有锁文件一致的依赖源 |
 | `GRADLE_USER_HOME` | `D:\dev\.gradle` | Gradle 全局缓存、Wrapper 下载和日志等 |
 | `STUDIO_PROPERTIES` | `D:\idea\idea.properties` | Android Studio 自定义属性文件，当前仅预配置 |
+| `HANMUSIC_DATA_DIR` | `D:\dev\data\HanMusic` | HanMusic 普通状态 JSON、有效备份及 `artwork` 封面缓存 |
 | 专用 VS Code 数据 | `D:\dev\vscode\data` | 此启动方式使用的编辑器用户数据 |
 | 专用 VS Code 扩展 | `D:\dev\vscode\extensions` | 此启动方式使用的扩展安装目录 |
 | 会话 `TEMP` / `TMP` | `D:\dev\tmp` | 下述启动脚本及其子进程的临时目录 |
@@ -49,6 +53,10 @@ Windows 插件构建会使用符号链接。用户开启开发者模式后，已
 `TEMP` / `TMP` 仅由启动脚本设置，不改变其他程序的全局临时目录。项目生成的 `.dart_tool`、`build` 等位于项目自身目录，也在 D 盘。`GRADLE_USER_HOME` 不改变项目内 `.gradle` 的位置；本项目目录在 D 盘，因此项目内缓存仍在 D 盘。
 
 `PUB_HOSTED_URL` 已设置为用户环境变量，也已加入环境脚本及项目 VS Code 的 `dart.env` / `terminal.integrated.env.windows`。`pubspec.lock` 使用该源；功能开发新增依赖时更新并提交锁文件。
+
+`HANMUSIC_DATA_DIR` 已加入本机 `Enter-HanMusic.ps1`、VS Code 启动环境及项目的 VS Code 环境配置。它是本机部署约定，程序只接受该变量中的绝对路径；未配置或不是绝对路径时，使用 `path_provider` 提供的系统应用支持目录。直接从其他会话启动 EXE 时应确认其继承了所需变量，避免将不同数据目录误认为曲库丢失。
+
+M2 使用 `FileAppStateStore` 保存 `state.json`、`state.backup.json` 和写入中的 `state.next.json`，不再依赖 `get_storage`。遇到较新 schema 或主备文件均损坏时保留原文件并提示只读保护；检查或迁移数据前先退出应用、保留备份，不用清空目录作为常规修复。源音频仍引用用户原文件，移除索引不会删除源文件。
 
 ### idea.properties
 
@@ -120,9 +128,9 @@ flutter run -d windows
 & 'D:\dev\setup\Verify-HanMusic.ps1'
 ```
 
-构建产物位于 `D:\project\HanMusic\build\windows\x64\runner\Release`。运行或分发时需保留整个目录中的 DLL 和 `data`，不能只拷贝 EXE。当前程序已进入 M1 单曲播放原型开发，音乐功能的验证与限制见 [M1 验证记录](./06-Windows-M1验证记录.md)。使用 `-t tool/...` 构建诊断入口会覆盖同一个输出目录，交付前必须重新构建默认 `lib/main.dart`。
+构建产物位于 `D:\project\HanMusic\build\windows\x64\runner\Release`。运行或分发时需保留整个目录中的 DLL 和 `data`，不能只拷贝 EXE。当前已实现 M2 本地曲库、队列和持久化核心；最新音乐功能与验收边界见 [M2 验证记录](./07-Windows-M2验证记录.md)，后端历史验证见 [M1 验证记录](./06-Windows-M1验证记录.md)。使用 `-t tool/...` 构建诊断入口会覆盖同一个输出目录，交付前必须重新构建默认 `lib/main.dart`。
 
-模板基线验证摘要见 `D:\dev\setup\verification\result.json`，启动检查见 `launch.json`，成功构建日志见 `build-windows-ascii-path.txt`。此前中文路径失败的日志保留为 `build-windows.txt`。这些历史记录不替代 M1 音乐业务验证。
+模板基线验证摘要见 `D:\dev\setup\verification\result.json`，启动检查见 `launch.json`，成功构建日志见 `build-windows-ascii-path.txt`。此前中文路径失败的日志保留为 `build-windows.txt`。这些历史记录不替代当前音乐业务验证。
 
 M1 合成音频测试工具 `imageio-ffmpeg 0.6.0` 位于 `D:\dev\tools\audio-test`，pip 缓存位于 `D:\dev\cache\pip`，测试音频及结果位于 `D:\dev\tmp\hanmusic-audio-probe`。该工具只生成测试样本，不属于应用运行依赖，不随程序发布。
 

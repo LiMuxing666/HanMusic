@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:han_music/app/core/theme/app_theme.dart';
 import 'package:han_music/app/data/models/song.dart';
 import 'package:han_music/app/data/repositories/local_song_picker.dart';
+import 'package:han_music/app/data/repositories/local_library_repository.dart';
+import 'package:han_music/app/services/library_service.dart';
 import 'package:han_music/app/modules/player/controller.dart';
 import 'package:han_music/app/modules/player/view.dart';
 import 'package:han_music/app/services/player_service.dart';
@@ -18,6 +21,131 @@ final _song = Song(
 );
 
 void main() {
+  for (final configuration in [
+    (size: const Size(1280, 720), scale: 1.0),
+    (size: const Size(800, 600), scale: 1.0),
+    (size: const Size(800, 600), scale: 1.5),
+  ]) {
+    testWidgets(
+      'library, queue and fixed controls fit ${configuration.size} scale ${configuration.scale}',
+      (tester) async {
+        await _withPlayer(
+          tester,
+          withLibrary: true,
+          size: configuration.size,
+          textScale: configuration.scale,
+          run: (fixture) async {
+            expect(find.text('把喜欢的音乐收进曲库'), findsOneWidget);
+            expect(tester.takeException(), isNull);
+            fixture.library!.replaceAll(_librarySongs(12));
+            await tester.pumpAndSettle();
+            await tester.tap(find.text('测试曲目 00000'));
+            await tester.pumpAndSettle();
+            expect(fixture.player.queue, hasLength(12));
+            expect(fixture.player.isPlaying.value, isTrue);
+            final playRect = tester.getRect(_playButton);
+            expect(playRect.bottom, lessThan(configuration.size.height));
+            expect(tester.takeException(), isNull);
+            await tester.tap(find.byKey(const Key('nav-2')));
+            await tester.pumpAndSettle();
+            expect(find.byKey(const Key('queue-list')), findsOneWidget);
+            expect(tester.takeException(), isNull);
+            await tester.tap(find.byKey(const Key('nav-1')));
+            await tester.pumpAndSettle();
+            expect(tester.takeException(), isNull);
+          },
+        );
+      },
+    );
+  }
+
+  testWidgets('ten thousand songs are virtualized and searchable by metadata', (
+    tester,
+  ) async {
+    await _withPlayer(
+      tester,
+      withLibrary: true,
+      run: (fixture) async {
+        fixture.library!.replaceAll(_librarySongs(10000));
+        await tester.pumpAndSettle();
+        final rows = find.byWidgetPredicate(
+          (widget) =>
+              widget.key is ValueKey<String> &&
+              (widget.key! as ValueKey<String>).value.startsWith(
+                'library-song-',
+              ),
+        );
+        expect(rows.evaluate().length, lessThan(25));
+        expect(find.text('测试曲目 09999'), findsNothing);
+        final scrollable = find.descendant(
+          of: find.byKey(const Key('library-list')),
+          matching: find.byType(Scrollable),
+        );
+        tester
+            .state<ScrollableState>(scrollable)
+            .position
+            .jumpTo(
+              tester
+                  .state<ScrollableState>(scrollable)
+                  .position
+                  .maxScrollExtent,
+            );
+        await tester.pumpAndSettle();
+        expect(find.text('测试曲目 09999'), findsOneWidget);
+        expect(rows.evaluate().length, lessThan(25));
+        expect(tester.getRect(_playButton).bottom, lessThan(720));
+        await tester.enterText(
+          find.byKey(const Key('library-search')),
+          '专辑 09999',
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('测试曲目 09999'), findsOneWidget);
+        await tester.tap(find.text('测试曲目 09999'));
+        await tester.pumpAndSettle();
+        expect(fixture.player.queue, hasLength(1));
+        expect(fixture.player.currentSong.value!.title, '测试曲目 09999');
+        expect(tester.takeException(), isNull);
+      },
+    );
+  });
+
+  testWidgets(
+    'library removal explains source files stay and queue order can change',
+    (tester) async {
+      await _withPlayer(
+        tester,
+        withLibrary: true,
+        run: (fixture) async {
+          final songs = _librarySongs(3);
+          fixture.library!.replaceAll(songs);
+          await tester.pumpAndSettle();
+          await tester.tap(find.text(songs.first.title));
+          await tester.pumpAndSettle();
+          await tester.tap(find.byKey(const Key('nav-2')));
+          await tester.pumpAndSettle();
+          await tester.tap(find.byTooltip('下移').first);
+          await tester.pumpAndSettle();
+          expect(fixture.player.queue[1].id, songs.first.id);
+          await tester.tap(find.byTooltip('从队列移除').first);
+          await tester.pumpAndSettle();
+          expect(fixture.player.queue, hasLength(2));
+          expect(fixture.library!.songs, hasLength(3));
+          await tester.tap(find.byKey(const Key('nav-0')));
+          await tester.pumpAndSettle();
+          await tester.tap(find.byTooltip('${songs.first.title}的操作'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('从曲库移除（保留文件）'));
+          await tester.pumpAndSettle();
+          expect(find.textContaining('电脑上的音乐文件会保留'), findsOneWidget);
+          await tester.tap(find.byKey(const Key('confirm-remove-song')));
+          await tester.pumpAndSettle();
+          expect(fixture.library!.songs, hasLength(2));
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+  );
+
   for (final configuration in [
     (size: const Size(1280, 720), scale: 1.0),
     (size: const Size(800, 600), scale: 1.0),
@@ -237,13 +365,14 @@ Future<void> _withPlayer(
   required Future<void> Function(_Fixture fixture) run,
   Size size = const Size(1280, 720),
   double textScale = 1,
+  bool withLibrary = false,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
 
-  final fixture = _Fixture();
+  final fixture = _Fixture(withLibrary: withLibrary);
   fixture.controller.onInit();
   try {
     await tester.pumpWidget(
@@ -263,6 +392,7 @@ Future<void> _withPlayer(
   } finally {
     fixture.timer.onClose();
     fixture.controller.onClose();
+    fixture.library?.onClose();
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.runAsync(fixture.player.shutdown);
     await tester.pump();
@@ -270,13 +400,26 @@ Future<void> _withPlayer(
 }
 
 class _Fixture {
-  _Fixture() {
+  _Fixture({bool withLibrary = false}) {
     player = PlayerService(backend);
     timer = TimerService(
       onExpired: player.pause,
       now: () => DateTime(2026, 9, 29, 20),
     );
-    controller = PlayerController(player: player, timer: timer, picker: picker);
+    if (withLibrary) {
+      library = LibraryService(
+        repository: LocalLibraryRepository(
+          artworkDirectory: Directory(r'D:\dev\tmp\hanmusic-widget-artwork'),
+        ),
+      );
+    }
+    controller = PlayerController(
+      player: player,
+      timer: timer,
+      picker: picker,
+      library: library,
+      libraryPicker: _EmptyLibraryPicker(),
+    );
   }
 
   final backend = FakeAudioBackend();
@@ -284,7 +427,27 @@ class _Fixture {
   late final PlayerService player;
   late final TimerService timer;
   late final PlayerController controller;
+  LibraryService? library;
 }
+
+class _EmptyLibraryPicker implements LibraryPicker {
+  @override
+  Future<List<String>> pickFiles() async => [];
+  @override
+  Future<String?> pickDirectory() async => null;
+}
+
+List<Song> _librarySongs(int count) => List.generate(count, (index) {
+  final number = index.toString().padLeft(5, '0');
+  return Song(
+    uri: Uri.file('D:/音乐/track-$number.flac', windows: true),
+    fileName: 'track-$number.flac',
+    trackTitle: '测试曲目 $number',
+    artist: '测试歌手',
+    album: '专辑 $number',
+    duration: const Duration(minutes: 3),
+  );
+});
 
 class _FakeSongPicker implements SongPicker {
   Song? next;
