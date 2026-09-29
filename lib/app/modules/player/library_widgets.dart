@@ -400,9 +400,9 @@ class _LibraryView extends StatelessWidget {
               controller: scrollController,
               itemCount: songs.length,
               itemExtent: rowExtent,
-              // High-speed jumps replace the whole viewport. Limit discarded
-              // offscreen work to one row on each side; rows hold no draft state.
-              cacheExtent: rowExtent,
+              // Build rows as they enter the viewport. Avoid text layout for
+              // offscreen rows discarded by fast scrolling; rows hold no draft.
+              cacheExtent: 0,
               addAutomaticKeepAlives: false,
               padding: const EdgeInsets.only(bottom: 14),
               itemBuilder: (context, index) => _LibrarySongRow(

@@ -136,6 +136,8 @@ M4 网络源配置和备份位于 `D:\dev\data\HanMusic\online`；队列仅保�
 
 M5 继续沿用这些 SDK/缓存/IDE 目录，没有为验证迁移到 C 盘。万文件、Profile、音频和打包保护证据归档于 `D:\dev\setup\verification\m5`；本机硬件为 i7-13620H、16 逻辑处理器、约 15.73 GiB 可见内存、UMIS NVMe，系统为 Windows 11 Build 26200。测试模式、结果与未达标项见 [M5 阶段验证记录](./13-Windows-M5阶段验证记录.md)，不能据此认定干净 Windows 机器已通过验收。
 
+dev.6 继续在 D 盘验证数据目录锁、保存失败确认与有界退出，257 项自动测试和静态分析通过，无新增 SDK 或依赖。CPU 采样、四轮 Profile 对照与后续预览验证归档至 `D:\dev\setup\verification\m5-followup`，结果及限制见 [数据保护与退出验证](./14-Windows-M5数据保护与退出验证.md)。同数据目录的锁保留到进程结束；旧版 dev.5 不支持此协议，升级时须先关闭旧版。
+
 `tool/package_windows_preview.ps1` 默认将开发预览写入 `D:\dev\releases\HanMusic`，重新构建正常入口并保留完整 Release、NOTICE、许可材料和哈希清单；不要直接打包曾由探针覆盖的 EXE。包内启动器默认把数据放在与 EXE 同目录的 `UserData` 子目录，与开发会话的 `D:\dev\data\HanMusic` 分开；保持 D 盘数据时应将预览解压到 D 盘或按 [预览运行说明](./12-Windows预览运行与验收.md) 指定绝对目录。
 
 当前 Windows JNI DLL 由传递依赖生成，应按完整 Release 保留，不能仅凭该文件推导用户必须安装 JRE；本轮预览不捆绑 JRE 或 VC++ 运行库。VC++ 运行条件、原生许可证和项目自身授权缺口见 [分发检查](./11-Windows依赖与分发检查.md)。M5 原生音频两阶段与全量测试已完成；正常入口预览 ZIP 已通过本机哈希、完整清单及系统 PowerShell 启动器的短时进程检查，详见阶段记录第 8 节。强制结束测试进程不算正常关窗，系统交互、干净机与公开发行条件仍待完成。

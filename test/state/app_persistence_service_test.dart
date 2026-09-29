@@ -90,13 +90,26 @@ void main() {
     () async {
       await player.open(song);
       store.failure = true;
-      await persistence.flush();
+      expect(await persistence.flush(), isFalse);
       expect(errors.single, contains('保存失败'));
       expect(player.isPlaying.value, isTrue);
       store.failure = false;
-      await persistence.flush();
+      expect(await persistence.flush(), isTrue);
       expect(store.saved.last.currentId, song.id);
       expect(player.isPlaying.value, isTrue);
+    },
+  );
+
+  test(
+    'close without flush stops listeners without repeating a final save',
+    () async {
+      await player.open(song);
+      expect(await persistence.flush(), isTrue);
+      final saves = store.saved.length;
+      await persistence.close(flush: false);
+      player.volume.value = .2;
+      await Future<void>.delayed(const Duration(milliseconds: 750));
+      expect(store.saved, hasLength(saves));
     },
   );
 }

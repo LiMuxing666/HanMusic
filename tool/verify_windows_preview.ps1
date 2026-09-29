@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$Archive,
-    [string]$VerificationRoot = 'D:\dev\tmp\hanmusic-m5-package-verification'
+    [string]$VerificationRoot = 'D:\dev\tmp\hanmusic-m5-package-verification',
+    [switch]$CheckDataDirectoryLock
 )
 
 $ErrorActionPreference = 'Stop'
@@ -91,6 +92,38 @@ function Stop-ExactOwnedProcess {
     }
 }
 
+function Test-DataDirectoryLockRange {
+    param([string]$LockFile)
+    $stream = $null
+    $acquired = $false
+    try {
+        # Open only: never create/truncate/write/delete the application's lock.
+        # Open errors must not be mistaken for a successful lock-conflict test.
+        $stream = [IO.File]::Open($LockFile, [IO.FileMode]::Open,
+            [IO.FileAccess]::ReadWrite, [IO.FileShare]::ReadWrite)
+        try {
+            $stream.Lock(0L, 1L)
+            $acquired = $true
+        } catch {
+            # PowerShell may wrap a .NET method's IOException. Inspect the
+            # actual IO exception, and accept only ERROR_LOCK_VIOLATION (33).
+            $exception = $_.Exception
+            while ($null -ne $exception -and $exception -isnot [IO.IOException]) {
+                $exception = $exception.InnerException
+            }
+            if ($null -eq $exception -or ($exception.HResult -band 0xffff) -ne 33) { throw }
+            return [pscustomobject]@{acquired = $false; win32Error = 33; hResult = $exception.HResult}
+        }
+        return [pscustomobject]@{acquired = $true; win32Error = $null; hResult = $null}
+    } finally {
+        if ($null -ne $stream) {
+            try {
+                if ($acquired) { $stream.Unlock(0L, 1L) }
+            } finally { $stream.Dispose() }
+        }
+    }
+}
+
 $root = Get-AbsoluteDPath -Value $VerificationRoot
 Assert-NoLinkedAncestors -Value $root
 if (-not (Test-Path -LiteralPath $root)) { New-Item -ItemType Directory -Path $root | Out-Null }
@@ -106,6 +139,9 @@ $report = [ordered]@{
     verificationDirectory = $runDirectory; archive = $Archive; checks = @(); error = $null;
     hostPowerShell = $PSVersionTable.PSVersion.ToString(); launcherPowerShell = $null;
     smoke = $null; cleanup = [ordered]@{appStopped = $null; helperStopped = $null};
+    dataDirectoryLock = [ordered]@{requested = [bool]$CheckDataDirectoryLock; path = $null;
+        heldWhileRunning = $null; conflictWin32Error = $null; conflictHResult = $null;
+        releasedAfterStop = $null; releaseAttempts = 0; releaseWaitMs = $null; releaseError = $null};
     limitations = @('This is a development-machine integrity and eight-second process smoke check.',
         'Forced termination is not normal window close, persistence, or shutdown verification.',
         'No playback, native dialog, GUI interaction, actual sleep, device switch, or clean-machine test is performed.',
@@ -119,6 +155,8 @@ $appStartTicks = 0L
 $appExecutable = $null
 $previousIds = @()
 $launchTime = $null
+$lockProbePath = $null
+$lockCheckAttempted = $false
 
 try {
     $archivePath = Get-AbsoluteDPath -Value $Archive
@@ -265,6 +303,22 @@ try {
         userDataDirectoryCreated = $true; onlineDirectoryCreated = $true; launcherExitCode = $helper.ExitCode;
         normalCloseTested = $false; guiInteractionTested = $false; cleanMachineTested = $false}
     $report.checks += [ordered]@{name = 'stock_windows_powershell_launcher_eight_second_smoke'; passed = $true}
+    if ($CheckDataDirectoryLock) {
+        $lockProbePath = Join-Path $dataDirectory '.hanmusic.lock'
+        Assert-NoLinkedAncestors -Value $lockProbePath
+        if (-not (Test-Path -LiteralPath $lockProbePath -PathType Leaf)) {
+            throw 'Application did not create the expected UserData lock file.'
+        }
+        $report.dataDirectoryLock.path = $lockProbePath
+        $lockCheckAttempted = $true
+        $lockResult = Test-DataDirectoryLockRange -LockFile $lockProbePath
+        $report.dataDirectoryLock.heldWhileRunning = -not $lockResult.acquired
+        $report.dataDirectoryLock.conflictWin32Error = $lockResult.win32Error
+        $report.dataDirectoryLock.conflictHResult = $lockResult.hResult
+        if ($lockResult.acquired) { throw 'Running application does not hold the data directory lock.' }
+        $report.checks += [ordered]@{name = 'running_app_holds_data_directory_lock'; passed = $true; win32Error = 33}
+        $report.limitations += 'File-range conflict and post-termination release do not replace a second-instance UI check.'
+    }
     $report.passed = $true
 } catch {
     $report.error = $_.Exception.Message
@@ -282,6 +336,36 @@ try {
     if ($null -ne $helper) {
         $report.cleanup.helperStopped = Stop-ExactOwnedProcess -Id $helper.Id -Executable $helperExecutable -StartTicks $helperStartTicks
         if (-not $report.cleanup.helperStopped) { $report.passed = $false; $report.error = 'Could not stop the exact owned helper process safely.' }
+    }
+    if ($CheckDataDirectoryLock -and $lockCheckAttempted -and $report.cleanup.appStopped -eq $true) {
+        $releaseTimer = [Diagnostics.Stopwatch]::StartNew()
+        try {
+            $report.dataDirectoryLock.releasedAfterStop = $false
+            while ($releaseTimer.ElapsedMilliseconds -lt 5000) {
+                Assert-NoLinkedAncestors -Value $lockProbePath
+                $report.dataDirectoryLock.releaseAttempts++
+                $released = Test-DataDirectoryLockRange -LockFile $lockProbePath
+                if ($released.acquired) {
+                    $report.dataDirectoryLock.releasedAfterStop = $true
+                    break
+                }
+                # Only error 33 reaches this retry; missing files, permissions,
+                # sharing violations and all other errors fail immediately.
+                $remainingMs = 5000 - $releaseTimer.ElapsedMilliseconds
+                if ($remainingMs -gt 0) { Start-Sleep -Milliseconds ([int][Math]::Min(100, $remainingMs)) }
+            }
+            if (-not $report.dataDirectoryLock.releasedAfterStop) {
+                throw 'Data directory lock was not released within five seconds after stopping the owned app.'
+            }
+            $report.checks += [ordered]@{name = 'data_directory_lock_released_after_owned_app_stop'; passed = $true}
+        } catch {
+            $report.passed = $false
+            $releaseError = 'Data directory lock release check failed: ' + $_.Exception.Message
+            $report.dataDirectoryLock.releaseError = $releaseError
+            if ($report.error) { $report.error += ' ' + $releaseError } else { $report.error = $releaseError }
+        } finally {
+            $report.dataDirectoryLock.releaseWaitMs = $releaseTimer.ElapsedMilliseconds
+        }
     }
     $report['finishedAt'] = [DateTime]::UtcNow.ToString('o')
     [IO.File]::WriteAllText($reportPath, ($report | ConvertTo-Json -Depth 10), $utf8)

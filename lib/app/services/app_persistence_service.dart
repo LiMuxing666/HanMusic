@@ -57,7 +57,9 @@ class AppPersistenceService extends GetxService {
     });
   }
 
-  Future<void> flush() async {
+  /// Returns false when the snapshot could not be persisted. Exit callers must
+  /// decide whether to cancel closing or explicitly discard unsaved changes.
+  Future<bool> flush() async {
     _debounce?.cancel();
     try {
       if (_libraryChanged) {
@@ -75,12 +77,16 @@ class AppPersistenceService extends GetxService {
           skipOnError: player.skipOnError.value,
         ),
       );
+      return true;
     } catch (_) {
       onError(store.warning ?? '本地状态保存失败，请检查数据目录空间与权限。');
+      return false;
     }
   }
 
-  Future<void> close() async {
+  /// [flush] may be disabled after an exit coordinator has saved successfully
+  /// or the user explicitly chose to exit without saving.
+  Future<void> close({bool flush = true}) async {
     if (_closed) return;
     _closed = true;
     _debounce?.cancel();
@@ -88,7 +94,7 @@ class AppPersistenceService extends GetxService {
     for (final worker in _workers) {
       worker.dispose();
     }
-    await flush();
+    if (flush) await this.flush();
   }
 
   @override

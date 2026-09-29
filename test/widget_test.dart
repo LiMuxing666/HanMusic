@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:han_music/app/core/theme/app_theme.dart';
@@ -218,7 +219,7 @@ void main() {
             for (final fraction in [.9, .1, .8, .2, 1.0, 0.0]) {
               position.jumpTo(position.maxScrollExtent * fraction);
               await tester.pumpAndSettle();
-              // At most a partial edge row plus one prefetched row per side.
+              // Keep construction bounded to the viewport and a few edge rows.
               expect(
                 rows.evaluate().length,
                 lessThanOrEqualTo(visibleRows + 4),
@@ -244,6 +245,78 @@ void main() {
               fixture.player.queue.single.id,
               fixture.library!.songs.first.id,
             );
+            expect(tester.takeException(), isNull);
+          },
+        );
+      },
+    );
+  }
+
+  for (final configuration in [
+    (size: const Size(1280, 720), scale: 1.0),
+    (size: const Size(800, 600), scale: 2.0),
+  ]) {
+    testWidgets(
+      'small wheel steps and reverse scrolling preserve row actions at ${configuration.size} scale ${configuration.scale}',
+      (tester) async {
+        await _withPlayer(
+          tester,
+          withLibrary: true,
+          size: configuration.size,
+          textScale: configuration.scale,
+          run: (fixture) async {
+            final songs = _librarySongs(40);
+            fixture.library!.replaceAll(songs);
+            await tester.pumpAndSettle();
+            final list = find.byKey(const Key('library-list'));
+            final scrollable = find.descendant(
+              of: list,
+              matching: find.byType(Scrollable),
+            );
+            final position = tester.state<ScrollableState>(scrollable).position;
+            final extent = tester.widget<ListView>(list).itemExtent!;
+
+            Future<void> wheelSteps(double direction) async {
+              for (var step = 0; step < 12; step++) {
+                final before = position.pixels;
+                await tester.sendEventToBinding(
+                  PointerScrollEvent(
+                    position: tester.getCenter(list),
+                    scrollDelta: Offset(0, direction * extent / 3),
+                  ),
+                );
+                await tester.pumpAndSettle();
+                expect(
+                  position.pixels - before,
+                  closeTo(direction * extent / 3, .01),
+                );
+                expect(_playButton.hitTestable(), findsOneWidget);
+                expect(tester.takeException(), isNull);
+              }
+            }
+
+            await wheelSteps(1);
+            expect(position.pixels, closeTo(extent * 4, .01));
+            final fourthMenu = find.byTooltip('${songs[4].title}的操作');
+            expect(fourthMenu.hitTestable(), findsOneWidget);
+            await tester.tap(fourthMenu);
+            await tester.pumpAndSettle();
+            await tester.tap(find.text('加入播放队列'));
+            await tester.pumpAndSettle();
+            expect(fixture.player.queue.map((song) => song.id), [songs[4].id]);
+
+            await wheelSteps(-1);
+            expect(position.pixels, closeTo(0, .01));
+            final firstMenu = find.byTooltip('${songs.first.title}的操作');
+            expect(firstMenu.hitTestable(), findsOneWidget);
+            await tester.tap(firstMenu);
+            await tester.pumpAndSettle();
+            await tester.tap(find.text('加入播放队列'));
+            await tester.pumpAndSettle();
+            expect(fixture.player.queue.map((song) => song.id), [
+              songs[4].id,
+              songs.first.id,
+            ]);
             expect(tester.takeException(), isNull);
           },
         );

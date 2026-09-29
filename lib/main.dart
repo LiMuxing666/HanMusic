@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show AppExitResponse;
+import 'dart:ui' show AppExitResponse, AppExitType;
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -16,20 +16,55 @@ import 'app/data/repositories/online_source_store.dart';
 import 'app/data/sources/just_audio_backend.dart';
 import 'app/data/sources/windows_power_events.dart';
 import 'app/routes/app_pages.dart';
+import 'app/modules/startup/startup_failure_app.dart';
+import 'app/modules/startup/unsaved_exit_dialog.dart';
 import 'app/services/app_persistence_service.dart';
+import 'app/services/app_shutdown_coordinator.dart';
+import 'app/services/data_directory_lock.dart';
 import 'app/services/library_service.dart';
 import 'app/services/online_music_service.dart';
 import 'app/services/player_service.dart';
 import 'app/services/sleep_timer_coordinator.dart';
 import 'app/services/timer_service.dart';
 
+// Keep the OS handle alive until the process exits. A timed-out async writer
+// must not race a new process after an early explicit unlock.
+DataDirectoryLock? _processDataLock;
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  Directory? dataDirectory;
+  try {
+    final configured = Platform.environment['HANMUSIC_DATA_DIR'];
+    dataDirectory = configured != null && path.isAbsolute(configured)
+        ? Directory(configured)
+        : await getApplicationSupportDirectory();
+    if (Platform.isWindows) {
+      _processDataLock = await DataDirectoryLock.acquire(dataDirectory);
+      dataDirectory = _processDataLock!.canonicalDirectory;
+    }
+    await _startHanMusic(dataDirectory);
+  } catch (error) {
+    // Startup has not presented player controls. Keep any acquired lock until
+    // process termination, including while partially initialized writers drain.
+    runApp(
+      StartupFailureApp(
+        message: error is DataDirectoryLockException
+            ? error.message
+            : '初始化未完成。请关闭应用，检查数据目录和运行依赖后重新启动。',
+        dataDirectory: dataDirectory?.path,
+        onExit: () {
+          unawaited(
+            WidgetsBinding.instance.exitApplication(AppExitType.required),
+          );
+        },
+      ),
+    );
+  }
+}
+
+Future<void> _startHanMusic(Directory dataDirectory) async {
   initializeAudioBackend();
-  final configured = Platform.environment['HANMUSIC_DATA_DIR'];
-  final dataDirectory = configured != null && path.isAbsolute(configured)
-      ? Directory(configured)
-      : await getApplicationSupportDirectory();
   final store = FileAppStateStore(dataDirectory);
   final snapshot = await store.load();
   final library = Get.put(
@@ -108,7 +143,9 @@ class HanMusicApp extends StatefulWidget {
 }
 
 class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
-  Future<void>? _shutdownTask;
+  late final AppShutdownCoordinator _shutdownCoordinator;
+  bool _closing = false;
+  bool _confirming = false;
   WindowsPowerEvents? _powerEvents;
   @override
   void initState() {
@@ -119,32 +156,48 @@ class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
         onResume: Get.find<TimerService>().checkDeadline,
       )..start();
     }
-  }
-
-  Future<void> _shutdown() => _shutdownTask ??= _closeServices();
-
-  Future<void> _closeServices() async {
-    Get.find<LibraryService>().cancelImport();
-    _powerEvents?.dispose();
-    Get.find<SleepTimerCoordinator>().onClose();
-    Get.find<TimerService>().onClose();
-    await Get.find<PlayerService>().pause();
-    await Get.find<AppPersistenceService>().close();
-    await Get.find<PlayerService>().shutdown();
-    await Get.find<OnlineMusicService>().close();
-    Get.find<LibraryService>().onClose();
+    _shutdownCoordinator = AppShutdownCoordinator(
+      cancelImport: Get.find<LibraryService>().cancelImport,
+      pause: Get.find<PlayerService>().pause,
+      flush: Get.find<AppPersistenceService>().flush,
+      confirmExitWithoutSaving: () async {
+        final context = Get.key.currentContext;
+        if (!mounted || context == null) return false;
+        setState(() => _confirming = true);
+        try {
+          return await confirmUnsavedExit(context);
+        } finally {
+          if (mounted) setState(() => _confirming = false);
+        }
+      },
+      disposePowerEvents: () => _powerEvents?.dispose(),
+      closeTimers: () {
+        try {
+          Get.find<SleepTimerCoordinator>().onClose();
+        } finally {
+          Get.find<TimerService>().onClose();
+        }
+      },
+      closePersistence: () =>
+          Get.find<AppPersistenceService>().close(flush: false),
+      closePlayer: Get.find<PlayerService>().shutdown,
+      closeOnline: Get.find<OnlineMusicService>().close,
+      closeLibrary: Get.find<LibraryService>().onClose,
+    );
   }
 
   @override
   Future<AppExitResponse> didRequestAppExit() async {
-    await _shutdown();
-    return AppExitResponse.exit;
+    if (mounted && !_closing) setState(() => _closing = true);
+    final allowExit = await _shutdownCoordinator.shutdown();
+    if (!allowExit && mounted) setState(() => _closing = false);
+    return allowExit ? AppExitResponse.exit : AppExitResponse.cancel;
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    unawaited(_shutdown());
+    unawaited(_shutdownCoordinator.shutdown(force: true));
     super.dispose();
   }
 
@@ -155,5 +208,23 @@ class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
     theme: HanMusicTheme.light,
     initialRoute: AppPages.player,
     getPages: AppPages.pages,
+    builder: (context, child) {
+      final busy = _closing && !_confirming;
+      return Stack(
+        children: [
+          ExcludeFocus(
+            excluding: busy,
+            child: AbsorbPointer(absorbing: busy, child: child),
+          ),
+          if (busy)
+            const Positioned.fill(
+              child: ColoredBox(
+                color: Color(0x66000000),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            ),
+        ],
+      );
+    },
   );
 }
