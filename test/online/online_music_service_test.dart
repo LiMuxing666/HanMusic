@@ -146,6 +146,145 @@ void main() {
   });
 
   test(
+    'exit checkpoint reports a pending failed save without closing service',
+    () async {
+      store.writeGate = Completer<void>();
+      store.writeStarted = Completer<void>();
+      final saving = service.upsertSource(source(id: 'draft'));
+      await store.writeStarted!.future;
+      final checkpoint = service.flushPendingMutations();
+      store.failWrites = true;
+      store.writeGate!.complete();
+      expect(await saving, isFalse);
+      expect(await checkpoint, isFalse);
+      expect(service.sources.map((item) => item.id), ['demo', 'other']);
+
+      store.failWrites = false;
+      store.writeGate = null;
+      expect(await service.upsertSource(source(id: 'retry')), isTrue);
+      expect(await service.flushPendingMutations(), isTrue);
+      expect(store.snapshot.sources.last.id, 'retry');
+    },
+  );
+
+  for (final removing in [false, true]) {
+    test(
+      'exit checkpoint observes pending ${removing ? 'removal' : 'selection'} failure',
+      () async {
+        store.writeGate = Completer<void>();
+        store.writeStarted = Completer<void>();
+        final changing = removing
+            ? service.removeSource('demo')
+            : service.selectSource('other');
+        await store.writeStarted!.future;
+        final checkpoint = service.flushPendingMutations();
+        store.failWrites = true;
+        store.writeGate!.complete();
+        await changing;
+        expect(await checkpoint, isFalse);
+        expect(service.selectedSourceId.value, 'demo');
+        expect(service.sources, hasLength(2));
+        // The failure is already delivered; a later close is not permanently
+        // blocked merely because this user operation failed in the past.
+        expect(await service.flushPendingMutations(), isTrue);
+      },
+    );
+  }
+
+  test(
+    'exit checkpoint ignores already reported test and disk failures',
+    () async {
+      repository.onSearch = (_, _, _) async =>
+          throw const OnlineMusicException('测试失败');
+      expect(await service.upsertSource(source(id: 'draft')), isFalse);
+      expect(await service.flushPendingMutations(), isTrue);
+      repository.onSearch = null;
+      store.failWrites = true;
+      expect(await service.upsertSource(source(id: 'draft')), isFalse);
+      expect(await service.flushPendingMutations(), isTrue);
+    },
+  );
+
+  test(
+    'exit checkpoint drains selection queued by a successful save caller',
+    () async {
+      final firstGate = store.writeGate = Completer<void>();
+      store.writeStarted = Completer<void>();
+      final saving = service.upsertSource(source(id: 'draft'));
+      await store.writeStarted!.future;
+      final secondStarted = Completer<void>();
+      final secondGate = Completer<void>();
+      final caller = saving.then((saved) async {
+        expect(saved, isTrue);
+        store.writeGate = secondGate;
+        store.writeStarted = secondStarted;
+        await service.selectSource('draft');
+      });
+      var drained = false;
+      final checkpoint = service.flushPendingMutations().then((value) {
+        drained = true;
+        return value;
+      });
+      firstGate.complete();
+      await secondStarted.future;
+      await Future<void>.delayed(Duration.zero);
+      expect(drained, isFalse);
+      secondGate.complete();
+      await caller;
+      expect(await checkpoint, isTrue);
+      expect(store.snapshot.selectedSourceId, 'draft');
+    },
+  );
+
+  test(
+    'checkpoint timeout leaves late commit and a queued retry usable',
+    () async {
+      final gate = store.writeGate = Completer<void>();
+      store.writeStarted = Completer<void>();
+      final saving = service.upsertSource(source(id: 'draft'));
+      await store.writeStarted!.future;
+      final checkpoint = service.flushPendingMutations();
+      await expectLater(
+        checkpoint.timeout(const Duration(milliseconds: 20)),
+        throwsA(isA<TimeoutException>()),
+      );
+      final retry = service.upsertSource(
+        OnlineSourceConfig.fromJson(
+          sourceJson(id: 'draft')..['name'] = 'later edit',
+        ),
+      );
+      gate.complete();
+      expect(await saving, isTrue);
+      expect(await retry, isTrue);
+      expect(await checkpoint, isTrue);
+      expect(store.snapshot.sources.last.name, 'later edit');
+      expect(await service.flushPendingMutations(), isTrue);
+    },
+  );
+
+  test(
+    'checkpoint retains an immediate failure from a save continuation',
+    () async {
+      final gate = store.writeGate = Completer<void>();
+      store.writeStarted = Completer<void>();
+      final saving = service.upsertSource(source(id: 'draft'));
+      await store.writeStarted!.future;
+      final caller = saving.then((saved) async {
+        expect(saved, isTrue);
+        store.writeGate = null;
+        store.failWrites = true;
+        await service.selectSource('draft');
+      });
+      final checkpoint = service.flushPendingMutations();
+      gate.complete();
+      await caller;
+      expect(service.errorMessage.value, contains('保存网络源选择失败'));
+      expect(await checkpoint, isFalse);
+      expect(await service.flushPendingMutations(), isTrue);
+    },
+  );
+
+  test(
     'deleting a source cancels its draft test and prevents stale save',
     () async {
       final response = Completer<OnlineSearchPage>();

@@ -1014,6 +1014,166 @@ void main() {
     );
   });
 
+  for (final scenario in [
+    (
+      label: 'release while disabled',
+      releaseWhileDisabled: true,
+      switchSong: false,
+      observeDisabled: true,
+    ),
+    (
+      label: 'release after same-song reload',
+      releaseWhileDisabled: false,
+      switchSong: false,
+      observeDisabled: true,
+    ),
+    (
+      label: 'release after changing songs',
+      releaseWhileDisabled: false,
+      switchSong: true,
+      observeDisabled: true,
+    ),
+    (
+      label: 'same-frame same-song reload',
+      releaseWhileDisabled: false,
+      switchSong: false,
+      observeDisabled: false,
+    ),
+  ]) {
+    testWidgets(
+      'seek invalidates an interrupted drag: ${scenario.label}',
+      (tester) async {
+        await _withPlayer(
+          tester,
+          withLibrary: true,
+          size: const Size(800, 600),
+          run: (fixture) async {
+            await fixture.player.open(_song);
+            fixture.backend.emitPosition(const Duration(seconds: 20));
+            await tester.pumpAndSettle();
+            final slider = find.byKey(const Key('seek-slider'));
+            final bounds = tester.getRect(slider);
+            final gesture = await tester.startGesture(
+              Offset(bounds.left + bounds.width * .25, bounds.center.dy),
+            );
+            var released = false;
+            await gesture.moveTo(
+              Offset(bounds.left + bounds.width * .7, bounds.center.dy),
+            );
+            await tester.pump();
+            expect(tester.widget<Slider>(slider).value, greaterThan(20000));
+            expect(fixture.backend.seekPositions, isEmpty);
+
+            final selected = scenario.switchSong
+                ? _song.copyWith(
+                    uri: Uri.file('D:/music/replacement.flac', windows: true),
+                    fileName: 'replacement.flac',
+                  )
+                : _song;
+            final gate = fixture.backend.loadCompleter =
+                scenario.observeDisabled ? Completer<Duration?>() : null;
+            final loading = fixture.player.playQueue([selected]);
+            try {
+              if (scenario.observeDisabled) {
+                await tester.pump();
+                expect(fixture.player.isLoading.value, isTrue);
+                expect(tester.widget<Slider>(slider).onChanged, isNull);
+              }
+              if (scenario.releaseWhileDisabled) {
+                await gesture.up();
+                released = true;
+                await tester.pump();
+              }
+              gate?.complete(const Duration(minutes: 3));
+              await loading;
+              await tester.pumpAndSettle();
+              fixture.backend.emitPosition(const Duration(seconds: 12));
+              await tester.pump();
+              if (!released) {
+                // Continuing the original pointer must not reactivate a drag
+                // invalidated by loading, even though the slider is ready again.
+                await gesture.moveBy(Offset(bounds.width * .05, 0));
+                await tester.pump();
+                await gesture.up();
+                released = true;
+                await tester.pumpAndSettle();
+              }
+              expect(
+                fixture.backend.seekPositions,
+                isEmpty,
+                reason: 'The old pointer must not seek the newly loaded audio.',
+              );
+              expect(
+                tester.widget<Slider>(slider).value,
+                12000,
+                reason:
+                    'An interrupted preview must stop masking live position.',
+              );
+              expect(find.text('00:12'), findsOneWidget);
+
+              final freshBounds = tester.getRect(slider);
+              final freshGesture = await tester.startGesture(
+                Offset(
+                  freshBounds.left + freshBounds.width * .25,
+                  freshBounds.center.dy,
+                ),
+              );
+              await freshGesture.moveBy(Offset(freshBounds.width * .25, 0));
+              await tester.pump();
+              expect(fixture.backend.seekPositions, isEmpty);
+              await freshGesture.up();
+              await tester.pumpAndSettle();
+              expect(fixture.backend.seekPositions, hasLength(1));
+              final seeked = fixture.backend.seekPositions.single;
+              expect(seeked, greaterThan(const Duration(seconds: 12)));
+              expect(
+                tester.widget<Slider>(slider).value,
+                seeked.inMilliseconds,
+              );
+
+              for (
+                var step = 0;
+                !_primaryFocusWithin(slider) && step < 100;
+                step++
+              ) {
+                await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+                await tester.pumpAndSettle();
+              }
+              expect(_primaryFocusWithin(slider), isTrue);
+              await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+              await tester.pumpAndSettle();
+              expect(fixture.backend.seekPositions, hasLength(2));
+              expect(fixture.backend.seekPositions.last, greaterThan(seeked));
+              final semantics = tester.ensureSemantics();
+              try {
+                await tester.pump();
+                final node = tester.getSemantics(slider);
+                node.owner!.performAction(node.id, ui.SemanticsAction.increase);
+                await tester.pumpAndSettle();
+                expect(fixture.backend.seekPositions, hasLength(3));
+                expect(
+                  fixture.backend.seekPositions.last,
+                  greaterThan(fixture.backend.seekPositions[1]),
+                );
+              } finally {
+                semantics.dispose();
+              }
+              expect(tester.takeException(), isNull);
+            } finally {
+              if (gate != null && !gate.isCompleted) {
+                gate.complete(const Duration(minutes: 3));
+              }
+              await loading;
+              if (!released) await gesture.up();
+              fixture.backend.loadCompleter = null;
+            }
+          },
+        );
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+  }
+
   testWidgets('seek previews while dragging and commits only on release', (
     tester,
   ) async {

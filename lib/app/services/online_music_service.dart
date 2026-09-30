@@ -37,8 +37,23 @@ class OnlineMusicService extends GetxService {
   int? _nextPage;
   String _searchedQuery = '';
   bool _closed = false;
+  bool _exitPending = false;
   Future<void> _mutations = Future.value();
+  final _pendingMutations = <Future<bool>>{};
+  int _mutationFailureSerial = 0;
   Future<void>? _closeFuture;
+
+  /// Automatic editor dismissal must wait until the exit request is resolved.
+  bool get isExitPending => _exitPending;
+
+  Future<bool> beginExit() {
+    _exitPending = true;
+    return flushPendingMutations();
+  }
+
+  void cancelExit() {
+    if (!_closed) _exitPending = false;
+  }
 
   OnlineSourceConfig? get selectedSource => _source(selectedSourceId.value);
   OnlineSourceConfig? _source(String? id) {
@@ -65,10 +80,10 @@ class OnlineMusicService extends GetxService {
     if (_closed) return Future.value();
     _invalidateContext();
     return _serialize(() async {
-      if (_closed) return;
+      if (_closed) return false;
       if (id != null && _source(id) == null) {
         errorMessage.value = '所选网络源不存在，请重新选择。';
-        return;
+        return false;
       }
       try {
         await _store.save(
@@ -78,17 +93,20 @@ class OnlineMusicService extends GetxService {
         selectedSourceId.value = id;
         errorMessage.value = null;
         statusMessage.value = id == null ? '已取消选择网络源。' : '已选择网络源。';
+        return true;
       } catch (_) {
         errorMessage.value = '保存网络源选择失败，已保留原选择。';
+        return false;
       }
-    });
+    }).then<void>((_) {});
   }
 
   Future<void> removeSource(String id) {
     if (_closed) return Future.value();
     _invalidateContext(sourceId: id);
     return _serialize(() async {
-      if (_closed || _source(id) == null) return;
+      if (_closed) return false;
+      if (_source(id) == null) return true;
       final remaining = sources.where((source) => source.id != id).toList();
       final selected = selectedSourceId.value == id
           ? null
@@ -102,10 +120,12 @@ class OnlineMusicService extends GetxService {
         selectedSourceId.value = selected;
         errorMessage.value = null;
         statusMessage.value = '已删除网络源；播放队列中的歌曲会保留并提示源不可用。';
+        return true;
       } catch (_) {
         errorMessage.value = '删除网络源失败，已保留原配置。';
+        return false;
       }
-    });
+    }).then<void>((_) {});
   }
 
   /// A draft is probed before disk or reactive state changes. A later source
@@ -381,11 +401,43 @@ class OnlineMusicService extends GetxService {
 
   Future<T> _serialize<T>(Future<T> Function() action) {
     final result = _mutations.then((_) => action());
-    _mutations = result.then<void>(
-      (_) {},
-      onError: (Object error, StackTrace stack) {},
+    final outcome = result.then<bool>(
+      (value) {
+        final successful = value != false;
+        if (!successful) _mutationFailureSerial++;
+        return successful;
+      },
+      onError: (Object error, StackTrace stack) {
+        _mutationFailureSerial++;
+        return false;
+      },
     );
+    _pendingMutations.add(outcome);
+    _mutations = outcome.then<void>((_) {});
+    unawaited(outcome.then((_) => _pendingMutations.remove(outcome)));
     return result;
+  }
+
+  /// Captures work pending when exit starts, including queued configuration
+  /// changes, and waits for commit continuations to finish. This does not close
+  /// or cancel the service. The exit coordinator owns the bounded wait and the
+  /// user's discard decision; a timed-out write may still complete afterward.
+  /// Previously completed failures have already reached their callers and do
+  /// not permanently mark future exit attempts as unsaved.
+  Future<bool> flushPendingMutations() async {
+    final initialFailures = _mutationFailureSerial;
+    var successful = true;
+    var pending = List<Future<bool>>.of(_pendingMutations);
+    while (pending.isNotEmpty) {
+      final outcomes = await Future.wait(pending);
+      successful = outcomes.every((saved) => saved) && successful;
+      // A caller can enqueue a selection that fails before the next event-loop
+      // turn. The serial retains that outcome without long-lived observers if
+      // a disk write hangs and the user cancels a timed-out exit.
+      await Future<void>.delayed(Duration.zero);
+      pending = List<Future<bool>>.of(_pendingMutations);
+    }
+    return successful && initialFailures == _mutationFailureSerial;
   }
 
   Future<void> close() => _closeFuture ??= _close();

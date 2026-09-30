@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' show AppExitResponse;
 
@@ -9,6 +10,7 @@ import 'package:get/get.dart';
 import 'package:han_music/app/data/models/song.dart';
 import 'package:han_music/app/data/repositories/app_state_store.dart';
 import 'package:han_music/app/data/repositories/local_library_repository.dart';
+import 'package:han_music/app/data/repositories/online_source_store.dart';
 import 'package:han_music/app/services/app_persistence_service.dart';
 import 'package:han_music/app/services/library_service.dart';
 import 'package:han_music/app/services/online_music_service.dart';
@@ -21,6 +23,59 @@ import 'support/fake_audio_backend.dart';
 import 'support/fake_online_music.dart';
 
 void main() {
+  testWidgets(
+    'pending online disk failure requires cancelable exit confirmation',
+    (tester) async {
+      await _withApp(tester, (fixture) async {
+        final gate = fixture.onlineStore.gate = Completer<void>();
+        final saving = fixture.online.upsertSource(
+          onlineTestSource(name: '新配置'),
+        );
+        await _drain(tester, fixture.onlineStore.started.future);
+        final pause = fixture.backend.pauseGate = Completer<void>();
+        AppExitResponse? response;
+        final exiting = tester.binding.handleRequestAppExit().then((value) {
+          response = value;
+          return value;
+        });
+        await _pumpTurns(tester);
+        expect(response, isNull);
+        fixture.onlineStore.fail = true;
+        gate.complete();
+        expect(await _drain(tester, saving), isFalse);
+        // The write fails while shutdown is still awaiting pause. The exit
+        // checkpoint must have been captured before that first async wait.
+        pause.complete();
+        fixture.backend.pauseGate = null;
+        await _pumpTurns(tester);
+
+        expect(find.text('更改尚未保存'), findsOneWidget);
+        expect(response, isNull);
+        expect(fixture.backend.disposed, isFalse);
+        expect(fixture.onlineStore.snapshot.sources, isEmpty);
+        await tester.tap(find.text('返回播放器'));
+        await tester.pumpAndSettle();
+        expect(await _drain(tester, exiting), AppExitResponse.cancel);
+
+        fixture.onlineStore.fail = false;
+        fixture.onlineStore.gate = null;
+        expect(
+          await _drain(
+            tester,
+            fixture.online.upsertSource(onlineTestSource(name: '重试后的配置')),
+          ),
+          isTrue,
+        );
+        expect(fixture.onlineStore.snapshot.sources.single.name, '重试后的配置');
+        expect(
+          await _drain(tester, tester.binding.handleRequestAppExit()),
+          AppExitResponse.exit,
+        );
+        expect(tester.takeException(), isNull);
+      });
+    },
+  );
+
   testWidgets('real app cancels a failed-save exit, then saves and exits', (
     tester,
   ) async {
@@ -77,6 +132,168 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+
+  testWidgets(
+    'late editor save cannot dismiss the timed-out exit confirmation',
+    (tester) async {
+      await _withApp(tester, (fixture) async {
+        final gate = fixture.onlineStore.gate = Completer<void>();
+        await tester.tap(find.byKey(const Key('nav-3')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('online-add-source')));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('online-source-json')),
+          jsonEncode(onlineTestSource(name: '稍后保存成功').toJson()),
+        );
+        final query = find.byKey(const Key('online-test-query'));
+        await tester.ensureVisible(query);
+        await tester.enterText(query, '退出测试');
+        await tester.tap(find.byKey(const Key('online-source-save')));
+        await tester.pump();
+        await _drain(tester, fixture.onlineStore.started.future);
+
+        AppExitResponse? response;
+        final exiting = tester.binding.handleRequestAppExit().then((value) {
+          response = value;
+          return value;
+        });
+        await _pumpTurns(tester);
+        await tester.pump(const Duration(seconds: 9));
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.text('更改尚未保存'), findsOneWidget);
+        expect(response, isNull);
+        expect(fixture.backend.disposed, isFalse);
+
+        gate.complete();
+        fixture.onlineStore.gate = null;
+        await _pumpTurns(tester);
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(fixture.onlineStore.snapshot.sources.single.name, '稍后保存成功');
+        expect(
+          find.byKey(const Key('online-source-json'), skipOffstage: false),
+          findsOneWidget,
+        );
+        expect(find.text('更改尚未保存'), findsOneWidget);
+        expect(response, isNull);
+        await tester.tap(find.text('返回播放器'));
+        await tester.pumpAndSettle();
+        expect(await _drain(tester, exiting), AppExitResponse.cancel);
+        expect(fixture.backend.disposed, isFalse);
+        expect(find.byKey(const Key('online-source-json')), findsOneWidget);
+        await tester.tap(find.text('取消'));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('online-source-json')), findsNothing);
+        await tester.tap(find.byKey(const Key('online-source-actions')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('编辑音乐源'));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('online-source-json')),
+          jsonEncode(onlineTestSource(name: '返回后再次编辑').toJson()),
+        );
+        await tester.ensureVisible(find.byKey(const Key('online-source-save')));
+        await tester.tap(find.byKey(const Key('online-source-save')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('online-source-json')), findsNothing);
+        expect(fixture.onlineStore.snapshot.sources.single.name, '返回后再次编辑');
+        expect(
+          await _drain(tester, tester.binding.handleRequestAppExit()),
+          AppExitResponse.exit,
+        );
+        expect(tester.takeException(), isNull);
+      });
+    },
+  );
+
+  testWidgets(
+    'editor save during exit pause keeps lifecycle observers mounted',
+    (tester) async {
+      await _withApp(tester, (fixture) async {
+        final gate = fixture.onlineStore.gate = Completer<void>();
+        await tester.tap(find.byKey(const Key('nav-3')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('online-add-source')));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('online-source-json')),
+          jsonEncode(onlineTestSource(name: '暂停期间保存成功').toJson()),
+        );
+        final query = find.byKey(const Key('online-test-query'));
+        await tester.ensureVisible(query);
+        await tester.enterText(query, '退出测试');
+        await tester.tap(find.byKey(const Key('online-source-save')));
+        await tester.pump();
+        await _drain(tester, fixture.onlineStore.started.future);
+
+        final pause = fixture.backend.pauseGate = Completer<void>();
+        Object? exitFailure;
+        final exiting = tester.binding.handleRequestAppExit().then(
+          (response) => response,
+          onError: (Object error) {
+            exitFailure = error;
+            return AppExitResponse.cancel;
+          },
+        );
+        await _pumpTurns(tester);
+        gate.complete();
+        fixture.onlineStore.gate = null;
+        await _pumpTurns(tester);
+        await tester.pump(const Duration(milliseconds: 400));
+        final editorStayedMounted = find
+            .byKey(const Key('online-source-json'), skipOffstage: false)
+            .evaluate()
+            .isNotEmpty;
+        pause.complete();
+        fixture.backend.pauseGate = null;
+        final response = await _drain(tester, exiting);
+
+        expect(editorStayedMounted, isTrue);
+        expect(exitFailure, isNull);
+        expect(response, AppExitResponse.exit);
+        expect(fixture.onlineStore.snapshot.sources.single.name, '暂停期间保存成功');
+        expect(fixture.backend.disposed, isTrue);
+        expect(tester.takeException(), isNull);
+      });
+    },
+  );
+
+  testWidgets(
+    'canceling an online save timeout permits a late commit and newer edit',
+    (tester) async {
+      await _withApp(tester, (fixture) async {
+        final gate = fixture.onlineStore.gate = Completer<void>();
+        final saving = fixture.online.upsertSource(
+          onlineTestSource(name: '旧请求'),
+        );
+        await _drain(tester, fixture.onlineStore.started.future);
+        final exiting = tester.binding.handleRequestAppExit();
+        await _pumpTurns(tester);
+        await tester.pump(const Duration(seconds: 9));
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.text('更改尚未保存'), findsOneWidget);
+        expect(fixture.backend.disposed, isFalse);
+        await tester.tap(find.text('返回播放器'));
+        await tester.pumpAndSettle();
+        expect(await _drain(tester, exiting), AppExitResponse.cancel);
+
+        final editing = fixture.online.upsertSource(
+          onlineTestSource(name: '取消后新编辑'),
+        );
+        gate.complete();
+        fixture.onlineStore.gate = null;
+        expect(await _drain(tester, saving), isTrue);
+        expect(await _drain(tester, editing), isTrue);
+        expect(fixture.onlineStore.snapshot.sources.single.name, '取消后新编辑');
+        expect(fixture.online.sources.single.name, '取消后新编辑');
+        expect(
+          await _drain(tester, tester.binding.handleRequestAppExit()),
+          AppExitResponse.exit,
+        );
+        expect(tester.takeException(), isNull);
+      });
+    },
+  );
 
   testWidgets('pending final save blocks pointer edits and keyboard focus', (
     tester,
@@ -162,8 +379,15 @@ Future<void> _withApp(
     final gate = fixture.store.gate;
     if (gate != null && !gate.isCompleted) gate.complete();
     fixture.store.gate = null;
+    fixture.onlineStore.fail = false;
+    final onlineGate = fixture.onlineStore.gate;
+    if (onlineGate != null && !onlineGate.isCompleted) onlineGate.complete();
+    fixture.onlineStore.gate = null;
+    final pauseGate = fixture.backend.pauseGate;
+    if (pauseGate != null && !pauseGate.isCompleted) pauseGate.complete();
+    fixture.backend.pauseGate = null;
     await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
+    await tester.pump(Duration.zero);
     await _drain(tester, fixture.dispose());
     Get.reset();
     Get.testMode = false;
@@ -196,7 +420,7 @@ Future<T> _drain<T>(WidgetTester tester, Future<T> operation) async {
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 1)),
     );
-    await tester.pump();
+    await tester.pump(Duration.zero);
   }
   expect(
     completed,
@@ -207,10 +431,19 @@ Future<T> _drain<T>(WidgetTester tester, Future<T> operation) async {
   return result as T;
 }
 
+Future<void> _pumpTurns(WidgetTester tester) async {
+  for (var turn = 0; turn < 15; turn++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 1)),
+    );
+    await tester.pump(Duration.zero);
+  }
+}
+
 class _Fixture {
-  final backend = FakeAudioBackend();
+  final backend = _ExitAudioBackend();
   final store = _MemoryStateStore();
-  final onlineStore = MemoryOnlineSourceStore();
+  final onlineStore = _GatedOnlineSourceStore();
   late final PlayerService player;
   late final LibraryService library;
   late final OnlineMusicService online;
@@ -285,5 +518,29 @@ class _MemoryStateStore implements AppStateStore {
     if (fail) throw const FileSystemException('controlled final-save failure');
     if (gate case final pending?) await pending.future;
     saved.add(snapshot);
+  }
+}
+
+class _GatedOnlineSourceStore extends MemoryOnlineSourceStore {
+  Completer<void>? gate;
+  final started = Completer<void>();
+  bool fail = false;
+
+  @override
+  Future<void> save(OnlineSourceSnapshot next) async {
+    if (!started.isCompleted) started.complete();
+    if (gate case final pending?) await pending.future;
+    if (fail) throw const FileSystemException('controlled source-save failure');
+    await super.save(next);
+  }
+}
+
+class _ExitAudioBackend extends FakeAudioBackend {
+  Completer<void>? pauseGate;
+
+  @override
+  Future<void> pause() async {
+    await super.pause();
+    if (pauseGate case final pending?) await pending.future;
   }
 }

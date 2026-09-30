@@ -76,6 +76,11 @@ class PlayerService extends GetxService {
   int _playIntent = 0;
   int _selectionGeneration = 0;
   int _loadGeneration = 0;
+  int _seekRevision = 0;
+  int _volumeRevision = 0;
+  int _confirmedVolumeRevision = 0;
+  double _confirmedVolume = 0.7;
+  bool _latestVolumeFailed = false;
   Future<void> _selectionTail = Future<void>.value();
   Completer<Uri?>? _resolutionCancellation;
   Future<void>? _errorPause;
@@ -106,6 +111,9 @@ class PlayerService extends GetxService {
 
   int get currentIndex =>
       queue.indexWhere((song) => song.id == currentSong.value?.id);
+
+  /// Identifies a selection, including a reload of the same song.
+  int get selectionRevision => _selectionGeneration;
 
   /// A restored selection is playable without eagerly opening its native file.
   bool get canPlay =>
@@ -273,6 +281,10 @@ class PlayerService extends GetxService {
     isLoading.value = false;
     errorMessage.value = null;
     this.volume.value = volume.isFinite ? volume.clamp(0.0, 1.0) : 0.7;
+    // Restored settings establish a new fallback and supersede pending writes.
+    _confirmedVolumeRevision = ++_volumeRevision;
+    _confirmedVolume = this.volume.value;
+    _latestVolumeFailed = false;
     this.skipOnError.value = skipOnError;
     playMode.value = mode;
     queue.assignAll(_unique(songs));
@@ -710,10 +722,18 @@ class PlayerService extends GetxService {
       }
       if (_pauseForGuard(PlaybackBoundary.beforePlay)) return;
       if (_completed) {
-        await _backend.seek(Duration.zero);
+        final seekRevision = ++_seekRevision;
+        try {
+          await _backend.seek(Duration.zero);
+        } catch (_) {
+          // A newer explicit seek replaces only this rewind. The outstanding
+          // manual play intent still applies to the newer requested position.
+          if (seekRevision == _seekRevision) rethrow;
+        }
         if (!_disposed &&
             intent == _playIntent &&
-            generation == _loadGeneration) {
+            generation == _loadGeneration &&
+            seekRevision == _seekRevision) {
           // Keep the completed marker until this rewind succeeds, so an
           // interrupted failed rewind can be retried on the next manual play.
           _completed = false;
@@ -774,12 +794,19 @@ class PlayerService extends GetxService {
     if (duration.value <= Duration.zero) return;
     final target = _clampPosition(value);
     final generation = _loadGeneration;
+    final revision = ++_seekRevision;
+    bool valid() =>
+        !_disposed &&
+        generation == _loadGeneration &&
+        revision == _seekRevision;
     try {
-      _completed = false;
       await _backend.seek(target);
-      if (!_disposed && generation == _loadGeneration) position.value = target;
+      if (valid()) {
+        _completed = false;
+        position.value = target;
+      }
     } catch (_) {
-      if (!_disposed) errorMessage.value = '暂时无法跳转到该位置，请重试。';
+      if (valid()) errorMessage.value = '暂时无法跳转到该位置，请重试。';
     }
   }
 
@@ -794,13 +821,23 @@ class PlayerService extends GetxService {
 
   Future<void> setVolume(double value) async {
     if (_disposed || !value.isFinite) return;
-    final previous = volume.value;
-    volume.value = value.clamp(0.0, 1.0);
+    final target = value.clamp(0.0, 1.0);
+    final revision = ++_volumeRevision;
+    _latestVolumeFailed = false;
+    volume.value = target;
     try {
-      await _backend.setVolume(volume.value);
+      await _backend.setVolume(target);
+      if (!_disposed && revision > _confirmedVolumeRevision) {
+        _confirmedVolumeRevision = revision;
+        _confirmedVolume = target;
+        // A late older success can establish the fallback after the latest
+        // request failed, but cannot replace a newer pending or successful UI.
+        if (_latestVolumeFailed) volume.value = _confirmedVolume;
+      }
     } catch (_) {
-      if (!_disposed) {
-        volume.value = previous;
+      if (!_disposed && revision == _volumeRevision) {
+        _latestVolumeFailed = true;
+        volume.value = _confirmedVolume;
         errorMessage.value = '音量调整失败，请重试。';
       }
     }

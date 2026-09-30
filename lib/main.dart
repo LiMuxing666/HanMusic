@@ -147,6 +147,7 @@ class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
   bool _closing = false;
   bool _confirming = false;
   WindowsPowerEvents? _powerEvents;
+  Future<bool>? _sourceSaveOnExit;
   @override
   void initState() {
     super.initState();
@@ -157,9 +158,21 @@ class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
       )..start();
     }
     _shutdownCoordinator = AppShutdownCoordinator(
-      cancelImport: Get.find<LibraryService>().cancelImport,
+      cancelImport: () {
+        // Capture before awaiting pause: a source write may fail during pause.
+        // Each canceled exit gets a fresh checkpoint on its next attempt.
+        _sourceSaveOnExit = Get.find<OnlineMusicService>().beginExit();
+        Get.find<LibraryService>().cancelImport();
+      },
       pause: Get.find<PlayerService>().pause,
-      flush: Get.find<AppPersistenceService>().flush,
+      flush: () async {
+        final saved = await Future.wait([
+          Get.find<AppPersistenceService>().flush(),
+          _sourceSaveOnExit ??
+              Get.find<OnlineMusicService>().flushPendingMutations(),
+        ]);
+        return saved.every((success) => success);
+      },
       confirmExitWithoutSaving: () async {
         final context = Get.key.currentContext;
         if (!mounted || context == null) return false;
@@ -190,7 +203,10 @@ class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
   Future<AppExitResponse> didRequestAppExit() async {
     if (mounted && !_closing) setState(() => _closing = true);
     final allowExit = await _shutdownCoordinator.shutdown();
-    if (!allowExit && mounted) setState(() => _closing = false);
+    if (!allowExit) {
+      Get.find<OnlineMusicService>().cancelExit();
+      if (mounted) setState(() => _closing = false);
+    }
     return allowExit ? AppExitResponse.exit : AppExitResponse.cancel;
   }
 

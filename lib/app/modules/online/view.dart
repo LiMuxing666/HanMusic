@@ -459,12 +459,22 @@ class _SourceEditorState extends State<_SourceEditor> {
 
   Future<void> _save() async {
     if (!(_form.currentState?.validate() ?? false)) return;
+    final route = ModalRoute.of(context);
     final saved = await widget.controller.saveSource(
       _json.text,
       _query.text,
       originalId: widget.source?.id,
     );
-    if (mounted && saved) Navigator.of(context).pop();
+    if (mounted &&
+        saved &&
+        !widget.controller.service.isExitPending &&
+        route?.isCurrent == true) {
+      Navigator.of(context).pop();
+    }
+    // A late save under the exit confirmation must leave that decision intact.
+    // Keep this editor mounted too: the framework's pending exit request can
+    // still hold its lifecycle observers. After canceling exit it can be closed
+    // normally, with the successfully saved configuration retained.
   }
 
   @override

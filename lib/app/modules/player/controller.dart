@@ -82,6 +82,7 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
       canPlay &&
       !isLoading.value;
   bool get canPlay => _player.canPlay;
+  int get selectionRevision => _player.selectionRevision;
 
   @override
   void onInit() {

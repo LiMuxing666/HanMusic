@@ -938,6 +938,7 @@ class _DesktopTransport extends StatelessWidget {
               Expanded(
                 child: _ProgressSlider(
                   key: ValueKey(song?.id),
+                  selectionRevision: controller.selectionRevision,
                   position: controller.position.value,
                   duration: controller.duration.value,
                   enabled: enabled && controller.duration.value > Duration.zero,

@@ -316,6 +316,237 @@ void main() {
     },
   );
 
+  group('async controls', () {
+    late _ControlledPlayerControlsBackend controlled;
+
+    setUp(() async {
+      await service.shutdown();
+      controlled = _ControlledPlayerControlsBackend();
+      backend = controlled;
+      service = PlayerService(backend);
+    });
+
+    for (final oldFails in [false, true]) {
+      test(
+        'latest seek owns the position and error (oldFails=$oldFails)',
+        () async {
+          await service.open(song);
+          await service.pause();
+          final oldGate = controlled.nextSeekGate = Completer<void>();
+          final oldSeek = service.seek(const Duration(seconds: 10));
+          final newGate = controlled.nextSeekGate = Completer<void>();
+          final newSeek = service.seek(const Duration(seconds: 80));
+          expect(backend.seekPositions, [
+            const Duration(seconds: 10),
+            const Duration(seconds: 80),
+          ]);
+          newGate.complete();
+          await newSeek;
+          if (oldFails) {
+            oldGate.completeError(StateError('Old seek failed'));
+          } else {
+            oldGate.complete();
+          }
+          await oldSeek;
+
+          expect(service.position.value, const Duration(seconds: 80));
+          expect(service.errorMessage.value, isNull);
+          expect(service.canPlay, isTrue);
+          expect(service.isPlaying.value, isFalse);
+        },
+      );
+    }
+
+    test('old seek failure cannot add an error to a new song', () async {
+      final replacement = Song(
+        uri: Uri.file('D:/music/replacement.mp3', windows: true),
+        fileName: 'replacement.mp3',
+      );
+      await service.open(song);
+      final gate = controlled.nextSeekGate = Completer<void>();
+      final seeking = service.seek(const Duration(seconds: 10));
+      await service.open(replacement);
+      gate.completeError(StateError('Old source seek failed'));
+      await seeking;
+
+      expect(service.currentSong.value?.id, replacement.id);
+      expect(service.position.value, Duration.zero);
+      expect(service.isPlaying.value, isTrue);
+      expect(service.errorMessage.value, isNull);
+    });
+
+    test('current failed seek at completion keeps replay usable', () async {
+      await service.open(song);
+      backend.emitState(playing: false, completed: true);
+      await _flushCallbacks();
+      final gate = controlled.nextSeekGate = Completer<void>();
+      final seeking = service.seek(const Duration(seconds: 42));
+      gate.completeError(StateError('Current seek failed'));
+      await seeking;
+      expect(service.errorMessage.value, contains('跳转'));
+      expect(service.canPlay, isTrue);
+      expect(service.isPlaying.value, isFalse);
+
+      await service.togglePlayback();
+      expect(backend.seekPositions, [
+        const Duration(seconds: 42),
+        Duration.zero,
+      ]);
+      expect(service.position.value, Duration.zero);
+      expect(backend.playCalls, 2);
+      expect(service.isPlaying.value, isTrue);
+    });
+
+    test(
+      'successful seek from completion resumes the requested position',
+      () async {
+        await service.open(song);
+        backend.emitState(playing: false, completed: true);
+        await _flushCallbacks();
+        await service.seek(const Duration(seconds: 42));
+        await service.togglePlayback();
+
+        expect(backend.seekPositions, [const Duration(seconds: 42)]);
+        expect(service.position.value, const Duration(seconds: 42));
+        expect(service.isPlaying.value, isTrue);
+      },
+    );
+
+    for (final playFails in [false, true]) {
+      test('new seek supersedes replay seek but preserves play intent '
+          '(playFails=$playFails)', () async {
+        await service.open(song);
+        backend.emitState(playing: false, completed: true);
+        await _flushCallbacks();
+        service.skipOnError.value = false;
+        final gate = controlled.nextSeekGate = Completer<void>();
+        final replaying = service.togglePlayback();
+        await service.seek(const Duration(seconds: 42));
+        if (playFails) backend.playFailure = StateError('Current play failed');
+        gate.completeError(StateError('Superseded replay seek failed'));
+        await replaying;
+
+        expect(backend.seekPositions, [
+          Duration.zero,
+          const Duration(seconds: 42),
+        ]);
+        expect(backend.playCalls, 2);
+        expect(service.position.value, const Duration(seconds: 42));
+        expect(service.isPlaying.value, !playFails);
+        expect(service.canPlay, !playFails);
+        expect(service.errorMessage.value, playFails ? isNotEmpty : isNull);
+      });
+    }
+
+    test('old volume failure cannot roll back a newer pending value', () async {
+      final oldGate = controlled.nextVolumeGate = Completer<void>();
+      final oldChange = service.setVolume(0.2);
+      final newGate = controlled.nextVolumeGate = Completer<void>();
+      final newChange = service.setVolume(0.8);
+      expect(backend.volumes, [0.2, 0.8]);
+      oldGate.completeError(StateError('Old volume failed'));
+      await oldChange;
+      expect(service.volume.value, 0.8);
+      expect(service.errorMessage.value, isNull);
+      newGate.complete();
+      await newChange;
+      expect(service.volume.value, 0.8);
+      expect(service.errorMessage.value, isNull);
+    });
+
+    for (final newestFailsFirst in [false, true]) {
+      test('two failed volume requests restore confirmed value '
+          '(newestFailsFirst=$newestFailsFirst)', () async {
+        final oldGate = controlled.nextVolumeGate = Completer<void>();
+        final oldChange = service.setVolume(0.2);
+        final newGate = controlled.nextVolumeGate = Completer<void>();
+        final newChange = service.setVolume(0.8);
+        if (newestFailsFirst) {
+          newGate.completeError(StateError('New volume failed'));
+          await newChange;
+          expect(service.volume.value, 0.7);
+          oldGate.completeError(StateError('Old volume failed'));
+          await oldChange;
+        } else {
+          oldGate.completeError(StateError('Old volume failed'));
+          await oldChange;
+          newGate.completeError(StateError('New volume failed'));
+          await newChange;
+        }
+        expect(service.volume.value, 0.7);
+        expect(service.errorMessage.value, contains('音量'));
+      });
+    }
+
+    for (final oldSucceedsFirst in [false, true]) {
+      test('latest volume failure falls back to successful older request '
+          '(oldSucceedsFirst=$oldSucceedsFirst)', () async {
+        final oldGate = controlled.nextVolumeGate = Completer<void>();
+        final oldChange = service.setVolume(0.2);
+        final newGate = controlled.nextVolumeGate = Completer<void>();
+        final newChange = service.setVolume(0.8);
+        if (oldSucceedsFirst) {
+          oldGate.complete();
+          await oldChange;
+          expect(service.volume.value, 0.8);
+          newGate.completeError(StateError('New volume failed'));
+          await newChange;
+        } else {
+          newGate.completeError(StateError('New volume failed'));
+          await newChange;
+          expect(service.volume.value, 0.7);
+          oldGate.complete();
+          await oldChange;
+        }
+        expect(service.volume.value, 0.2);
+        expect(service.errorMessage.value, contains('音量'));
+      });
+    }
+
+    test(
+      'late older volume success cannot replace newer confirmed value',
+      () async {
+        final oldGate = controlled.nextVolumeGate = Completer<void>();
+        final oldChange = service.setVolume(0.2);
+        await service.setVolume(0.8);
+        oldGate.complete();
+        await oldChange;
+        expect(service.volume.value, 0.8);
+        final gate = controlled.nextVolumeGate = Completer<void>();
+        final failingChange = service.setVolume(0.4);
+        gate.completeError(StateError('Latest volume failed'));
+        await failingChange;
+        expect(service.volume.value, 0.8);
+        expect(service.errorMessage.value, contains('音量'));
+      },
+    );
+
+    for (final oldFails in [false, true]) {
+      test(
+        'restored volume invalidates older callbacks (oldFails=$oldFails)',
+        () async {
+          final oldGate = controlled.nextVolumeGate = Completer<void>();
+          final oldChange = service.setVolume(0.2);
+          await service.restoreQueue([song], volume: 0.6);
+          if (oldFails) {
+            oldGate.completeError(StateError('Pre-restore volume failed'));
+          } else {
+            oldGate.complete();
+          }
+          await oldChange;
+          expect(service.volume.value, 0.6);
+          expect(service.errorMessage.value, isNull);
+          final gate = controlled.nextVolumeGate = Completer<void>();
+          final failingChange = service.setVolume(0.9);
+          gate.completeError(StateError('Post-restore volume failed'));
+          await failingChange;
+          expect(service.volume.value, 0.6);
+          expect(service.errorMessage.value, contains('音量'));
+        },
+      );
+    }
+  });
+
   test('a backend error disables playback until a new file loads', () async {
     await service.open(song);
     backend.emitError(StateError('Native device failed'));
@@ -505,5 +736,33 @@ class _ControlledPauseBackend extends FakeAudioBackend {
     if (gate != null) await gate.future;
     if (failure != null) throw failure;
     emitState(playing: false);
+  }
+}
+
+class _ControlledPlayerControlsBackend extends FakeAudioBackend {
+  Completer<void>? nextSeekGate;
+  Completer<void>? nextVolumeGate;
+
+  @override
+  Future<void> seek(Duration position) async {
+    final gate = nextSeekGate;
+    nextSeekGate = null;
+    if (gate == null) return super.seek(position);
+    calls.add('seek');
+    seekPositions.add(position);
+    // Match just_audio's optimistic position event. Completing the Future
+    // later must not synthesize an unrelated late native stream event.
+    emitPosition(position);
+    await gate.future;
+  }
+
+  @override
+  Future<void> setVolume(double volume) async {
+    final gate = nextVolumeGate;
+    nextVolumeGate = null;
+    if (gate == null) return super.setVolume(volume);
+    calls.add('setVolume');
+    volumes.add(volume);
+    await gate.future;
   }
 }

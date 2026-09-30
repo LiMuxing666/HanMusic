@@ -588,6 +588,7 @@ class _PlaybackCard extends StatelessWidget {
           children: [
             _ProgressSlider(
               key: ValueKey(song?.id),
+              selectionRevision: controller.selectionRevision,
               position: position,
               duration: duration,
               enabled: enabled && duration > Duration.zero,
@@ -666,12 +667,14 @@ class _PlaybackCard extends StatelessWidget {
 class _ProgressSlider extends StatefulWidget {
   const _ProgressSlider({
     super.key,
+    required this.selectionRevision,
     required this.position,
     required this.duration,
     required this.enabled,
     required this.onSeek,
   });
 
+  final int selectionRevision;
   final Duration position;
   final Duration duration;
   final bool enabled;
@@ -683,6 +686,20 @@ class _ProgressSlider extends StatefulWidget {
 
 class _ProgressSliderState extends State<_ProgressSlider> {
   double? _dragPosition;
+  bool _acceptInteraction = false;
+
+  @override
+  void didUpdateWidget(covariant _ProgressSlider oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.enabled ||
+        widget.selectionRevision != oldWidget.selectionRevision) {
+      // A pointer may remain down while the same track reloads. Clearing only
+      // the preview would still let its late release seek the new playback.
+      // The revision also catches reloads completed between rendered frames.
+      _acceptInteraction = false;
+      _dragPosition = null;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -700,11 +717,20 @@ class _ProgressSliderState extends State<_ProgressSlider> {
           label: _formatTime(displayed),
           semanticFormatterCallback: (value) =>
               '播放进度 ${_formatTime(Duration(milliseconds: value.round()))}',
+          onChangeStart: widget.enabled
+              ? (_) => _acceptInteraction = true
+              : null,
           onChanged: widget.enabled
-              ? (value) => setState(() => _dragPosition = value)
+              ? (value) {
+                  if (_acceptInteraction) {
+                    setState(() => _dragPosition = value);
+                  }
+                }
               : null,
           onChangeEnd: widget.enabled
               ? (value) {
+                  if (!_acceptInteraction) return;
+                  _acceptInteraction = false;
                   widget.onSeek(Duration(milliseconds: value.round()));
                   setState(() => _dragPosition = null);
                 }

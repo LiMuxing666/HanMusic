@@ -8,7 +8,8 @@ Future<bool> confirmUnsavedExit(BuildContext context) async =>
         title: const Text('更改尚未保存'),
         scrollable: true,
         content: const Text(
-          '无法写入本地数据。可以返回播放器，检查磁盘空间和访问权限后再退出。'
+          '部分更改未能保存，或保存仍在等待。请返回播放器查看错误提示，'
+          '检查网络连接、磁盘空间和访问权限后重试。'
           '仍然退出会丢失尚未保存的更改。',
         ),
         actions: [
