@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:han_music/app/core/theme/app_theme.dart';
@@ -418,6 +420,234 @@ void main() {
     );
   }
 
+  for (final configuration in [
+    (size: const Size(1280, 720), scale: 1.0),
+    (size: const Size(800, 600), scale: 2.0),
+  ]) {
+    testWidgets(
+      'library background pixels follow scrolling and current song at ${configuration.size} scale ${configuration.scale}',
+      (tester) async {
+        final captureKey = GlobalKey();
+        await _withPlayer(
+          tester,
+          withLibrary: true,
+          size: configuration.size,
+          textScale: configuration.scale,
+          captureKey: captureKey,
+          run: (fixture) async {
+            final songs = _librarySongs(20);
+            fixture.library!.replaceAll(songs);
+            await fixture.player.open(songs.first);
+            await tester.pumpAndSettle();
+            final list = find.byKey(const Key('library-list'));
+            final viewport = tester.getRect(list);
+            final position = tester
+                .state<ScrollableState>(
+                  find.descendant(of: list, matching: find.byType(Scrollable)),
+                )
+                .position;
+            final extent = tester.widget<ListView>(list).itemExtent!;
+            final firstRow = find.byKey(
+              ValueKey('library-song-${songs.first.id}'),
+            );
+            final firstBounds = tester.getRect(firstRow);
+            // Points lie in padding, away from text, artwork and menu icons.
+            final oldSelectedPoint = Offset(
+              firstBounds.left + 6,
+              firstBounds.bottom - 16,
+            );
+            final initial = await _capturePagePixels(tester, captureKey);
+            const selected = Color(0xFFE7F0E2);
+            final theme = HanMusicTheme.light;
+            expect(initial.colorAt(oldSelectedPoint), selected);
+            expect(
+              initial.colorAt(firstBounds.topLeft + const Offset(1, 1)),
+              theme.scaffoldBackgroundColor,
+              reason: 'The rounded corner must leave the page visible.',
+            );
+            expect(
+              initial.colorAt(
+                Offset(firstBounds.center.dx, firstBounds.bottom + 3),
+              ),
+              theme.scaffoldBackgroundColor,
+              reason: 'The gap between rows must retain the page background.',
+            );
+
+            position.jumpTo(extent / 2);
+            await tester.pumpAndSettle();
+            final scrolled = await _capturePagePixels(tester, captureKey);
+            expect(
+              scrolled.colorAt(oldSelectedPoint),
+              theme.colorScheme.surface,
+              reason: 'The old position now belongs to the next ordinary row.',
+            );
+            expect(
+              scrolled.colorAt(Offset(viewport.left + 6, viewport.top + 8)),
+              selected,
+              reason:
+                  'The remaining visible part of the current row stays green.',
+            );
+            final shiftedBounds = tester.getRect(firstRow);
+            expect(
+              scrolled.colorAt(
+                Offset(shiftedBounds.center.dx, shiftedBounds.bottom + 3),
+              ),
+              theme.scaffoldBackgroundColor,
+            );
+
+            position.jumpTo(0);
+            await tester.pumpAndSettle();
+            final returned = await _capturePagePixels(tester, captureKey);
+            expect(returned.colorAt(oldSelectedPoint), selected);
+            await fixture.player.open(songs[1]);
+            await tester.pumpAndSettle();
+            final changed = await _capturePagePixels(tester, captureKey);
+            expect(
+              changed.colorAt(oldSelectedPoint),
+              theme.colorScheme.surface,
+            );
+            position.jumpTo(extent);
+            await tester.pumpAndSettle();
+            final next = await _capturePagePixels(tester, captureKey);
+            expect(
+              next.colorAt(oldSelectedPoint),
+              selected,
+              reason:
+                  'The newly selected song carries its background into view.',
+            );
+            expect(tester.takeException(), isNull);
+          },
+        );
+      },
+    );
+
+    testWidgets(
+      'library hover and focused ink stay inside the viewport at ${configuration.size} scale ${configuration.scale}',
+      (tester) async {
+        final captureKey = GlobalKey();
+        await _withPlayer(
+          tester,
+          withLibrary: true,
+          size: configuration.size,
+          textScale: configuration.scale,
+          captureKey: captureKey,
+          run: (fixture) async {
+            final songs = _librarySongs(20);
+            fixture.library!.replaceAll(songs);
+            await tester.pumpAndSettle();
+            final list = find.byKey(const Key('library-list'));
+            final viewport = tester.getRect(list);
+            final position = tester
+                .state<ScrollableState>(
+                  find.descendant(of: list, matching: find.byType(Scrollable)),
+                )
+                .position;
+            final extent = tester.widget<ListView>(list).itemExtent!;
+            final firstRow = find.byKey(
+              ValueKey('library-song-${songs.first.id}'),
+              skipOffstage: false,
+            );
+            final bounds = tester.getRect(firstRow);
+            final hoverPoint = Offset(bounds.left + 6, bounds.top + 20);
+            final outsideBands = [
+              Rect.fromLTRB(
+                viewport.left,
+                viewport.top - 6,
+                viewport.right,
+                viewport.top,
+              ),
+              Rect.fromLTRB(
+                viewport.left,
+                viewport.bottom,
+                viewport.right,
+                viewport.bottom + 6,
+              ),
+            ];
+            final neutral = await _capturePagePixels(tester, captureKey);
+            expect(
+              neutral.colorAt(hoverPoint),
+              HanMusicTheme.light.colorScheme.surface,
+            );
+
+            final mouse = await tester.createGesture(
+              kind: PointerDeviceKind.mouse,
+            );
+            await mouse.addPointer(location: const Offset(1, 1));
+            try {
+              await mouse.moveTo(hoverPoint);
+              await tester.pumpAndSettle();
+              final hovered = await _capturePagePixels(tester, captureKey);
+              expect(
+                hovered.colorAt(hoverPoint),
+                isNot(neutral.colorAt(hoverPoint)),
+                reason: 'Pointer hover must produce visible feedback.',
+              );
+              position.jumpTo(extent / 2);
+              await tester.pumpAndSettle();
+              final movedHover = await _capturePagePixels(tester, captureKey);
+              expect(
+                movedHover.colorAt(Offset(viewport.left + 6, viewport.top + 8)),
+                hovered.colorAt(hoverPoint),
+                reason:
+                    'Hover feedback must move with the partially visible row.',
+              );
+              expect(
+                movedHover.colorAt(Offset(bounds.left + 6, bounds.bottom - 16)),
+                HanMusicTheme.light.colorScheme.surface,
+                reason:
+                    'Hover must not remain painted on the next ordinary row.',
+              );
+              for (final band in outsideBands) {
+                expect(movedHover.changedPixels(hovered, band), 0);
+              }
+              position.jumpTo(0);
+              await tester.pumpAndSettle();
+              final returned = await _capturePagePixels(tester, captureKey);
+              expect(returned.colorAt(hoverPoint), hovered.colorAt(hoverPoint));
+              await mouse.moveTo(const Offset(1, 1));
+              await tester.pumpAndSettle();
+
+              for (var step = 0; step < 100; step++) {
+                await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+                await tester.pumpAndSettle();
+                if (_primaryFocusWithin(firstRow)) break;
+              }
+              expect(_primaryFocusWithin(firstRow), isTrue);
+              final focused = await _capturePagePixels(tester, captureKey);
+              expect(
+                focused.colorAt(hoverPoint),
+                isNot(neutral.colorAt(hoverPoint)),
+                reason: 'Keyboard focus must remain visible without the mouse.',
+              );
+              for (final offset in [extent / 2, extent * 3, 0.0]) {
+                position.jumpTo(offset);
+                await tester.pumpAndSettle();
+                expect(_primaryFocusWithin(firstRow), isTrue);
+                final scrolled = await _capturePagePixels(tester, captureKey);
+                for (final band in outsideBands) {
+                  expect(
+                    scrolled.changedPixels(focused, band),
+                    0,
+                    reason: 'Row ink must not repaint outside the viewport.',
+                  );
+                }
+              }
+              FocusManager.instance.primaryFocus!.unfocus();
+              await tester.pumpAndSettle();
+              final released = await _capturePagePixels(tester, captureKey);
+              expect(released.colorAt(hoverPoint), neutral.colorAt(hoverPoint));
+              expect(fixture.backend.playCalls, 0);
+              expect(tester.takeException(), isNull);
+            } finally {
+              await mouse.removePointer();
+            }
+          },
+        );
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+  }
+
   testWidgets('ten thousand songs are virtualized and searchable by metadata', (
     tester,
   ) async {
@@ -733,12 +963,66 @@ bool _primaryFocusWithin(Finder finder) {
   return found;
 }
 
+Future<_PagePixels> _capturePagePixels(
+  WidgetTester tester,
+  GlobalKey key,
+) async {
+  final boundary =
+      key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+  final origin = boundary.localToGlobal(Offset.zero);
+  // Rasterization completes outside the test's fake clock. Capture the page,
+  // including ancestor ink, rather than a row's own repaint boundary.
+  return (await tester.runAsync(() async {
+    final image = await boundary.toImage(pixelRatio: 1);
+    try {
+      final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      return _PagePixels(data!, image.width, image.height, origin);
+    } finally {
+      image.dispose();
+    }
+  }))!;
+}
+
+class _PagePixels {
+  const _PagePixels(this.data, this.width, this.height, this.origin);
+
+  final ByteData data;
+  final int width;
+  final int height;
+  final Offset origin;
+
+  Color colorAt(Offset point) {
+    final x = (point.dx - origin.dx).floor();
+    final y = (point.dy - origin.dy).floor();
+    assert(x >= 0 && x < width && y >= 0 && y < height);
+    final offset = (y * width + x) * 4;
+    return Color.fromARGB(
+      data.getUint8(offset + 3),
+      data.getUint8(offset),
+      data.getUint8(offset + 1),
+      data.getUint8(offset + 2),
+    );
+  }
+
+  int changedPixels(_PagePixels other, Rect region) {
+    var changed = 0;
+    for (var y = region.top.ceil(); y < region.bottom.floor(); y++) {
+      for (var x = region.left.ceil(); x < region.right.floor(); x++) {
+        final point = Offset(x + .5, y + .5);
+        if (colorAt(point) != other.colorAt(point)) changed++;
+      }
+    }
+    return changed;
+  }
+}
+
 Future<void> _withPlayer(
   WidgetTester tester, {
   required Future<void> Function(_Fixture fixture) run,
   Size size = const Size(1280, 720),
   double textScale = 1,
   bool withLibrary = false,
+  GlobalKey? captureKey,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -755,7 +1039,9 @@ Future<void> _withPlayer(
           data: MediaQuery.of(
             context,
           ).copyWith(textScaler: TextScaler.linear(textScale)),
-          child: child!,
+          child: captureKey == null
+              ? child!
+              : RepaintBoundary(key: captureKey, child: child!),
         ),
         home: PlayerPage(controller: fixture.controller),
       ),

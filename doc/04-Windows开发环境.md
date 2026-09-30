@@ -152,6 +152,8 @@ M1 合成音频测试工具 `imageio-ffmpeg 0.6.0` 位于 `D:\dev\tools\audio-te
 
 验收应确认 `flutter doctor -v` 的 Windows 和 Visual Studio 项通过，`flutter devices` 中存在 Windows 设备，并成功执行分析、测试和实际 Windows 构建。仅列出已安装组件不等于构建成功。未配置 Android 工具链的提示应按 Windows 开发范围判断，不必为消除无关提示安装整套 Android 环境。
 
+万曲滚动复核新增 `tool/run_windows_performance_probe.ps1`，通过系统 PowerShell 5.1 运行已冻结的完整 Profile 目录并校验原始 JSON/CSV。`ProbeDirectory` 必须匹配探针构建时的 `--dart-define=HANMUSIC_PROBE_DIR=...`，不是运行时环境变量；A/B 应串行执行、暂停构建与测试，每次使用新的证据名称。工具、数据和缓存继续位于 D 盘，无新增 SDK/依赖；命令、对比结果和未保留的候选见 [滚动性能复核](./17-Windows-M5滚动性能复核.md)。
+
 ## 5. 官方参考
 
 - [Flutter Windows 环境配置](https://docs.flutter.dev/platform-integration/windows/setup)：Visual Studio 的 `Desktop development with C++` 工作负载及验证命令。
