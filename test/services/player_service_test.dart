@@ -100,18 +100,37 @@ void main() {
   );
 
   test('repeated toggle during restart seek requests playback once', () async {
+    final successor = Song(
+      uri: Uri.file('D:/music/successor.mp3', windows: true),
+      fileName: 'successor.mp3',
+    );
     await service.open(song);
     backend.emitState(playing: false, completed: true);
+    await _flushCallbacks();
+    service.addToQueue([successor]);
     backend.seekCompleter = Completer<void>();
 
     final firstToggle = service.togglePlayback();
     await service.togglePlayback();
+    backend.emitState(playing: false, completed: true);
+    await _flushCallbacks();
     expect(backend.seekPositions, [Duration.zero]);
     expect(backend.playCalls, 1);
+    expect(service.currentSong.value?.id, song.id);
+    expect(backend.loadedUris, [song.uri]);
 
     backend.seekCompleter!.complete();
     await firstToggle;
     expect(backend.playCalls, 2);
+    expect(service.position.value, Duration.zero);
+    expect(service.isPlaying.value, isTrue);
+
+    backend.emitState(playing: false, completed: true);
+    await _flushCallbacks();
+    expect(service.currentSong.value?.id, successor.id);
+    expect(backend.loadedUris, [song.uri, successor.uri]);
+    expect(backend.playCalls, 3);
+    expect(service.isPlaying.value, isTrue);
   });
 
   test(
@@ -130,6 +149,143 @@ void main() {
       expect(service.isPlaying.value, isFalse);
     },
   );
+
+  test(
+    'obsolete restart failure cannot stop or skip a newly playing song',
+    () async {
+      final replacement = Song(
+        uri: Uri.file('D:/music/replacement.mp3', windows: true),
+        fileName: 'replacement.mp3',
+      );
+      final successor = Song(
+        uri: Uri.file('D:/music/successor.mp3', windows: true),
+        fileName: 'successor.mp3',
+      );
+      await service.open(song);
+      backend.emitState(playing: false, completed: true);
+      final gate = backend.seekCompleter = Completer<void>();
+      final restarting = service.togglePlayback();
+      expect(backend.seekPositions, [Duration.zero]);
+
+      await service.playQueue([replacement, successor]);
+      expect(service.currentSong.value?.id, replacement.id);
+      expect(service.isPlaying.value, isTrue);
+      final pauses = backend.pauseCalls;
+      gate.completeError(StateError('Obsolete restart seek failed'));
+      await restarting;
+      await _flushCallbacks();
+
+      expect(service.currentSong.value?.id, replacement.id);
+      expect(service.isPlaying.value, isTrue);
+      expect(service.canPlay, isTrue);
+      expect(service.errorMessage.value, isNull);
+      expect(backend.pauseCalls, pauses);
+      expect(backend.loadedUris, [song.uri, replacement.uri]);
+      expect(backend.playCalls, 2);
+    },
+  );
+
+  test(
+    'obsolete restart failure after pause leaves the same song usable',
+    () async {
+      await service.open(song);
+      backend.emitState(playing: false, completed: true);
+      final gate = backend.seekCompleter = Completer<void>();
+      final restarting = service.togglePlayback();
+      await service.pause();
+      final pauses = backend.pauseCalls;
+      gate.completeError(StateError('Paused restart seek failed'));
+      await restarting;
+      await _flushCallbacks();
+
+      expect(service.currentSong.value?.id, song.id);
+      expect(service.isPlaying.value, isFalse);
+      expect(service.canPlay, isTrue);
+      expect(service.errorMessage.value, isNull);
+      expect(backend.pauseCalls, pauses);
+      expect(backend.loadedUris, [song.uri]);
+      expect(backend.playCalls, 1);
+
+      backend.seekCompleter = null;
+      await service.togglePlayback();
+      expect(backend.seekPositions, [Duration.zero, Duration.zero]);
+      expect(backend.playCalls, 2);
+      expect(service.position.value, Duration.zero);
+      expect(service.isPlaying.value, isTrue);
+      expect(service.errorMessage.value, isNull);
+    },
+  );
+
+  test(
+    'obsolete restart success cannot overwrite a newer paused seek',
+    () async {
+      await service.shutdown();
+      final controlled = _ControlledRestartSeekBackend();
+      backend = controlled;
+      service = PlayerService(backend);
+      await service.open(song);
+      backend.emitState(playing: false, completed: true);
+      final gate = controlled.returnGate = Completer<void>();
+      final restarting = service.togglePlayback();
+      await service.pause();
+      controlled.returnGate = null;
+      await service.seek(const Duration(seconds: 42));
+      expect(service.position.value, const Duration(seconds: 42));
+      gate.complete();
+      await restarting;
+
+      expect(service.position.value, const Duration(seconds: 42));
+      expect(service.isPlaying.value, isFalse);
+      expect(service.canPlay, isTrue);
+      expect(service.errorMessage.value, isNull);
+      expect(backend.playCalls, 1);
+    },
+  );
+
+  for (final skip in [false, true]) {
+    test(
+      'current restart failure preserves skip-on-error=$skip behavior',
+      () async {
+        final successor = Song(
+          uri: Uri.file('D:/music/successor.mp3', windows: true),
+          fileName: 'successor.mp3',
+        );
+        final messages = <String?>[];
+        final subscription = service.errorMessage.listen(messages.add);
+        addTearDown(subscription.cancel);
+        service.skipOnError.value = skip;
+        await service.open(song);
+        backend.emitState(playing: false, completed: true);
+        service.addToQueue([successor]);
+        final gate = backend.seekCompleter = Completer<void>();
+        final restarting = service.togglePlayback();
+        expect(backend.seekPositions, [Duration.zero]);
+        gate.completeError(StateError('Current restart seek failed'));
+        await restarting;
+        await _flushCallbacks();
+
+        expect(
+          messages.whereType<String>().where((value) => value.isNotEmpty),
+          isNotEmpty,
+        );
+        if (skip) {
+          expect(service.currentSong.value?.id, successor.id);
+          expect(service.isPlaying.value, isTrue);
+          expect(service.canPlay, isTrue);
+          expect(service.errorMessage.value, isNull);
+          expect(backend.loadedUris, [song.uri, successor.uri]);
+          expect(backend.playCalls, 2);
+        } else {
+          expect(service.currentSong.value?.id, song.id);
+          expect(service.isPlaying.value, isFalse);
+          expect(service.canPlay, isFalse);
+          expect(service.errorMessage.value, isNotEmpty);
+          expect(backend.loadedUris, [song.uri]);
+          expect(backend.playCalls, 1);
+        }
+      },
+    );
+  }
 
   test(
     'seek clamps to the known duration and accepts valid positions',
@@ -319,6 +475,22 @@ void main() {
 }
 
 Future<void> _flushCallbacks() => Future<void>.delayed(Duration.zero);
+
+class _ControlledRestartSeekBackend extends FakeAudioBackend {
+  Completer<void>? returnGate;
+
+  @override
+  Future<void> seek(Duration position) async {
+    final gate = returnGate;
+    if (gate == null) return super.seek(position);
+    calls.add('seek');
+    seekPositions.add(position);
+    // just_audio publishes the requested position before awaiting its platform
+    // seek. Delay only the Future result, without inventing a late stream event.
+    emitPosition(position);
+    await gate.future;
+  }
+}
 
 class _ControlledPauseBackend extends FakeAudioBackend {
   Completer<void>? pauseGate;

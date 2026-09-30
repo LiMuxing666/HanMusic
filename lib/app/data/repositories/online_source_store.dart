@@ -77,6 +77,8 @@ class FileOnlineSourceStore implements OnlineSourceStore {
 
   File get _primary => File('${directory.path}/sources.json');
   File get _backup => File('${directory.path}/sources.backup.json');
+  File get _backupTemporary =>
+      File('${directory.path}/sources.backup.next.json');
   File get _temporary => File('${directory.path}/sources.next.json');
 
   @override
@@ -132,7 +134,12 @@ class FileOnlineSourceStore implements OnlineSourceStore {
       await directory.create(recursive: true);
       await _temporary.writeAsString(encoded, flush: true);
       final previous = _lastGood;
-      if (previous != null) await _backup.writeAsString(previous, flush: true);
+      if (previous != null) {
+        // Keep the last valid backup intact until its replacement is complete.
+        // This also protects a backup used to recover a corrupt primary.
+        await _backupTemporary.writeAsString(previous, flush: true);
+        await _backupTemporary.rename(_backup.path);
+      }
       await _temporary.rename(_primary.path);
       _lastGood = encoded;
     });

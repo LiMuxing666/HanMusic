@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:han_music/app/data/repositories/online_source_store.dart';
 
+import '../support/store_write_fault.dart';
 import 'online_test_support.dart';
 
 void main() {
@@ -92,6 +93,71 @@ void main() {
       expect(backup['selectedSourceId'], 'a');
     },
   );
+
+  for (final fault in StoreWriteFault.values) {
+    test('recovered sources survive ${fault.name} and retry', () async {
+      final store = FileOnlineSourceStore(directory);
+      await store.load();
+      for (final id in ['a', 'b']) {
+        await store.save(
+          OnlineSourceSnapshot(
+            sources: [source(id: id)],
+            selectedSourceId: id,
+          ),
+        );
+      }
+      final primary = File('${directory.path}/sources.json');
+      final backup = File('${directory.path}/sources.backup.json');
+      final savedBackup = await backup.readAsBytes();
+      await primary.writeAsString('{interrupted');
+      final recovered = FileOnlineSourceStore(directory);
+      expect((await recovered.load()).selectedSourceId, 'a');
+      final injection = StoreWriteFaultInjection(
+        directory: directory,
+        stem: 'sources',
+        fault: fault,
+      );
+
+      await injection.run(() async {
+        await expectLater(
+          recovered.save(
+            OnlineSourceSnapshot(
+              sources: [source(id: 'c')],
+              selectedSourceId: 'c',
+            ),
+          ),
+          throwsA(isA<FileSystemException>()),
+        );
+      });
+
+      expect(injection.injected, 1);
+      final restarted = await FileOnlineSourceStore(directory).load();
+      expect(restarted.selectedSourceId, 'a');
+      expect(restarted.sources.single.id, 'a');
+      expect(await backup.readAsBytes(), savedBackup);
+      expect(await primary.readAsString(), '{interrupted');
+
+      await recovered.save(
+        OnlineSourceSnapshot(
+          sources: [source(id: 'd')],
+          selectedSourceId: 'd',
+        ),
+      );
+      expect(
+        (await FileOnlineSourceStore(directory).load()).selectedSourceId,
+        'd',
+      );
+      expect(await backup.readAsBytes(), savedBackup);
+      expect(
+        await File('${directory.path}/sources.next.json').exists(),
+        isFalse,
+      );
+      expect(
+        await File('${directory.path}/sources.backup.next.json').exists(),
+        isFalse,
+      );
+    });
+  }
 
   test(
     'new schema is protected and not downgraded through an older backup',

@@ -483,30 +483,37 @@ class _SourceEditorState extends State<_SourceEditor> {
               style: TextStyle(color: _muted, fontSize: 12),
             ),
             const SizedBox(height: 14),
-            TextFormField(
-              key: const Key('online-source-json'),
-              controller: _json,
-              minLines: 7,
-              maxLines: 12,
-              style: const TextStyle(fontSize: 12),
-              decoration: const InputDecoration(
-                labelText: '高级配置 JSON',
-                alignLabelWithHint: true,
+            Obx(
+              () => TextFormField(
+                key: const Key('online-source-json'),
+                controller: _json,
+                readOnly: widget.controller.isSaving.value,
+                minLines: 7,
+                maxLines: 12,
+                style: const TextStyle(fontSize: 12),
+                decoration: const InputDecoration(
+                  labelText: '高级配置 JSON',
+                  alignLabelWithHint: true,
+                ),
+                validator: (value) =>
+                    value == null || value.trim().isEmpty ? '请填写音乐源配置' : null,
               ),
-              validator: (value) =>
-                  value == null || value.trim().isEmpty ? '请填写音乐源配置' : null,
             ),
             const SizedBox(height: 14),
-            TextFormField(
-              key: const Key('online-test-query'),
-              controller: _query,
-              decoration: const InputDecoration(
-                labelText: '测试关键词',
-                helperText: '保存前会用此关键词测试连接，成功后才保存。',
-                helperMaxLines: 2,
+            Obx(
+              () => TextFormField(
+                key: const Key('online-test-query'),
+                controller: _query,
+                readOnly: widget.controller.isSaving.value,
+                decoration: const InputDecoration(
+                  labelText: '测试关键词',
+                  helperText: '保存前会用此关键词测试连接，成功后才保存。',
+                  helperMaxLines: 2,
+                ),
+                validator: (value) => value == null || value.trim().isEmpty
+                    ? '请填写明确的测试关键词'
+                    : null,
               ),
-              validator: (value) =>
-                  value == null || value.trim().isEmpty ? '请填写明确的测试关键词' : null,
             ),
             Obx(() {
               final error = widget.controller.actionError.value;

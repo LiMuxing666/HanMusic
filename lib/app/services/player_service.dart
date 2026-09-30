@@ -678,24 +678,31 @@ class PlayerService extends GetxService {
   Future<void> togglePlayback() async {
     if (!canPlay || _toggleBusy) return;
     _toggleBusy = true;
+    var operationSelection = _selectionGeneration;
+    int? operationIntent;
+    int? operationLoad;
     try {
       if (isPlaying.value) {
         await pause();
         return;
       }
       _playbackGuard?.onManualPlayback();
-      final intent = ++_playIntent;
+      final intent = operationIntent = ++_playIntent;
       _wantsPlayback = true;
       if (_restored) {
         _failedIds.clear();
-        await _requestSelection(
+        final opening = _requestSelection(
           currentSong.value!.id,
           intent: intent,
           resumePosition: position.value,
         );
+        // Restoring owns a new selection and may advance native generations
+        // while retrying. Its selection/intent identify this awaited operation.
+        operationSelection = _selectionGeneration;
+        await opening;
         return;
       }
-      final generation = _loadGeneration;
+      final generation = operationLoad = _loadGeneration;
       if (_errorPause case final pending?) await pending;
       if (_pauseInFlight case final pending?) await pending;
       if (_disposed || intent != _playIntent || generation != _loadGeneration) {
@@ -703,9 +710,13 @@ class PlayerService extends GetxService {
       }
       if (_pauseForGuard(PlaybackBoundary.beforePlay)) return;
       if (_completed) {
-        _completed = false;
         await _backend.seek(Duration.zero);
-        if (!_disposed && generation == _loadGeneration) {
+        if (!_disposed &&
+            intent == _playIntent &&
+            generation == _loadGeneration) {
+          // Keep the completed marker until this rewind succeeds, so an
+          // interrupted failed rewind can be retried on the next manual play.
+          _completed = false;
           position.value = Duration.zero;
         }
       }
@@ -716,7 +727,14 @@ class PlayerService extends GetxService {
         await _backend.play();
       }
     } catch (error) {
-      if (!_disposed) _handleBackendError(error);
+      // A replaced or paused replay must not attribute its late failure to the
+      // current track. Global backend error events retain their own handling.
+      if (!_disposed &&
+          operationSelection == _selectionGeneration &&
+          (operationIntent == null || operationIntent == _playIntent) &&
+          (operationLoad == null || operationLoad == _loadGeneration)) {
+        _handleBackendError(error);
+      }
     } finally {
       _toggleBusy = false;
     }

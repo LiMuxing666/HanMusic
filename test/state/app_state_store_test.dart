@@ -6,6 +6,8 @@ import 'package:han_music/app/data/models/play_mode.dart';
 import 'package:han_music/app/data/models/song.dart';
 import 'package:han_music/app/data/repositories/app_state_store.dart';
 
+import '../support/store_write_fault.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory directory;
@@ -115,6 +117,61 @@ void main() {
       );
     },
   );
+
+  for (final fault in StoreWriteFault.values) {
+    test('recovered state survives ${fault.name} and retry', () async {
+      await store.load();
+      await store.save(
+        AppSnapshot(songs: [song], position: const Duration(seconds: 10)),
+      );
+      await store.save(
+        AppSnapshot(songs: [song], position: const Duration(seconds: 20)),
+      );
+      final primary = File('${directory.path}/state.json');
+      final backup = File('${directory.path}/state.backup.json');
+      final savedBackup = await backup.readAsBytes();
+      await primary.writeAsString('{interrupted');
+      final recovered = FileAppStateStore(directory);
+      expect((await recovered.load()).position, const Duration(seconds: 10));
+      final injection = StoreWriteFaultInjection(
+        directory: directory,
+        stem: 'state',
+        fault: fault,
+      );
+
+      await injection.run(() async {
+        await expectLater(
+          recovered.save(
+            AppSnapshot(songs: [song], position: const Duration(seconds: 30)),
+          ),
+          throwsA(isA<FileSystemException>()),
+        );
+      });
+
+      expect(injection.injected, 1);
+      final restarted = await FileAppStateStore(directory).load();
+      expect(restarted.position, const Duration(seconds: 10));
+      expect(restarted.songs.single.id, song.id);
+      expect(await backup.readAsBytes(), savedBackup);
+      expect(await primary.readAsString(), '{interrupted');
+
+      // Retry the original instance: its failed write must not poison either
+      // the ordering barrier or the previous known-good snapshot.
+      await recovered.save(
+        AppSnapshot(songs: [song], position: const Duration(seconds: 40)),
+      );
+      expect(
+        (await FileAppStateStore(directory).load()).position,
+        const Duration(seconds: 40),
+      );
+      expect(await backup.readAsBytes(), savedBackup);
+      expect(await File('${directory.path}/state.next.json').exists(), isFalse);
+      expect(
+        await File('${directory.path}/state.backup.next.json').exists(),
+        isFalse,
+      );
+    });
+  }
 
   test(
     'invalid schema and damaged backup are preserved without overwriting',

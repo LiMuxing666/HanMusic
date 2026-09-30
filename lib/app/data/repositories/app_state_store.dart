@@ -137,6 +137,7 @@ class FileAppStateStore implements AppStateStore {
 
   File get _primary => File('${directory.path}/state.json');
   File get _backup => File('${directory.path}/state.backup.json');
+  File get _backupTemporary => File('${directory.path}/state.backup.next.json');
   File get _temporary => File('${directory.path}/state.next.json');
 
   @override
@@ -192,7 +193,10 @@ class FileAppStateStore implements AppStateStore {
       await _temporary.writeAsString(encoded, flush: true);
       final previous = _lastGood;
       if (previous != null) {
-        await _backup.writeAsString(previous, flush: true);
+        // A recovered backup can be the only valid committed snapshot. Never
+        // truncate it: a partial write must damage only this staging file.
+        await _backupTemporary.writeAsString(previous, flush: true);
+        await _backupTemporary.rename(_backup.path);
       }
       await _temporary.rename(_primary.path);
       _lastGood = encoded;

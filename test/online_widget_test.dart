@@ -223,6 +223,128 @@ void main() {
   );
 
   testWidgets(
+    'source save blocks in-flight edits and saves the submitted configuration',
+    (tester) async {
+      await _withOnline(
+        tester,
+        empty: true,
+        run: (fixture) async {
+          await tester.tap(find.byKey(const Key('online-add-source')));
+          await tester.pumpAndSettle();
+          final json = find.byKey(const Key('online-source-json'));
+          final query = find.byKey(const Key('online-test-query'));
+          final submitted = jsonEncode(
+            onlineTestSource(name: '提交的配置').toJson(),
+          );
+          await tester.enterText(json, submitted);
+          await tester.ensureVisible(query);
+          await tester.enterText(query, '等待连接');
+          final gate = Completer<OnlineSearchPage>();
+          fixture.repository.gates['等待连接'] = gate;
+          await tester.tap(find.byKey(const Key('online-source-save')));
+          await tester.pump();
+          String? visibleJson;
+          String? visibleQuery;
+          try {
+            expect(fixture.repository.requests.single.query, '等待连接');
+            visibleJson = await _trySourceFieldEdit(
+              tester,
+              json,
+              jsonEncode(onlineTestSource(name: '不应接受的新配置').toJson()),
+            );
+            visibleQuery = await _trySourceFieldEdit(
+              tester,
+              query,
+              '不应接受的新关键词',
+            );
+            expect(find.byType(AlertDialog), findsOneWidget);
+            expect(fixture.store.saves, 0);
+          } finally {
+            gate.complete(OnlineSearchPage(songs: [], hasMore: false));
+            await tester.pumpAndSettle();
+          }
+          expect(find.byType(AlertDialog), findsNothing);
+          expect(fixture.store.snapshot.sources.single.name, '提交的配置');
+          expect(fixture.store.saves, 1);
+          expect(fixture.repository.requests, hasLength(1));
+          expect(
+            visibleJson,
+            submitted,
+            reason:
+                'Saving must not accept a draft that will be silently discarded.',
+          );
+          expect(visibleQuery, '等待连接');
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+  );
+
+  testWidgets(
+    'source save failure preserves the draft and restores editing for retry',
+    (tester) async {
+      await _withOnline(
+        tester,
+        run: (fixture) async {
+          await _sourceAction(tester, '编辑音乐源');
+          final json = find.byKey(const Key('online-source-json'));
+          final query = find.byKey(const Key('online-test-query'));
+          final submitted = jsonEncode(
+            onlineTestSource(name: '待保存的配置').toJson(),
+          );
+          await tester.enterText(json, submitted);
+          await tester.ensureVisible(query);
+          await tester.enterText(query, '稍后失败');
+          final queryEditable = find.descendant(
+            of: query,
+            matching: find.byType(EditableText),
+          );
+          final queryFocus = tester
+              .widget<EditableText>(queryEditable)
+              .focusNode;
+          final gate = Completer<OnlineSearchPage>();
+          fixture.repository.gates['稍后失败'] = gate;
+          await tester.tap(find.byKey(const Key('online-source-save')));
+          await tester.pump();
+          try {
+            await _trySourceFieldEdit(tester, json, '{unsubmitted edit');
+            await _trySourceFieldEdit(tester, query, '等待期间的输入');
+          } finally {
+            gate.completeError(const OnlineMusicException('连接测试失败，请重试。'));
+            await tester.pumpAndSettle();
+          }
+          expect(find.byType(AlertDialog), findsOneWidget);
+          expect(fixture.store.snapshot.sources.single.name, '示例音乐源');
+          expect(fixture.store.saves, 0);
+          expect(
+            tester.widget<EditableText>(queryEditable).focusNode,
+            same(queryFocus),
+          );
+          expect(
+            tester.widget<TextFormField>(json).controller!.text,
+            submitted,
+          );
+          expect(tester.widget<TextFormField>(query).controller!.text, '稍后失败');
+          final corrected = jsonEncode(
+            onlineTestSource(name: '修正后的配置').toJson(),
+          );
+          await tester.ensureVisible(json);
+          await tester.enterText(json, corrected);
+          await tester.ensureVisible(query);
+          await tester.enterText(query, '重试关键词');
+          await tester.tap(find.byKey(const Key('online-source-save')));
+          await tester.pumpAndSettle();
+          expect(find.byType(AlertDialog), findsNothing);
+          expect(fixture.repository.requests.last.query, '重试关键词');
+          expect(fixture.store.snapshot.sources.single.name, '修正后的配置');
+          expect(fixture.store.saves, 1);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+  );
+
+  testWidgets(
     'search debounces 500 ms and stale response never replaces new results',
     (tester) async {
       await _withOnline(
@@ -335,6 +457,32 @@ void main() {
 }
 
 final _play = find.byKey(const Key('toggle-playback'));
+
+Future<String> _trySourceFieldEdit(
+  WidgetTester tester,
+  Finder field,
+  String text,
+) async {
+  await tester.ensureVisible(field);
+  await tester.tap(field);
+  await tester.pump();
+  final editable = find.descendant(
+    of: field,
+    matching: find.byType(EditableText),
+  );
+  // Exercise the same callback used for incoming platform editing updates.
+  // Read-only fields must reject text changes even when they retain focus.
+  tester
+      .state<EditableTextState>(editable)
+      .updateEditingValue(
+        TextEditingValue(
+          text: text,
+          selection: TextSelection.collapsed(offset: text.length),
+        ),
+      );
+  await tester.pump();
+  return tester.widget<EditableText>(editable).controller.text;
+}
 
 Future<void> _sourceAction(WidgetTester tester, String action) async {
   await tester.tap(find.byKey(const Key('online-source-actions')));
