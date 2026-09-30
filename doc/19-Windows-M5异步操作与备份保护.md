@@ -40,6 +40,10 @@
 
 最终 `flutter test --no-pub --reporter expanded` **296 项通过**（43 秒）；`dart analyze lib test tool` 无问题；`dart format --output=none --set-exit-if-changed lib test tool` 检查 79 个文件、0 变化。证据分别为 `tests-final.txt`、`analyze-final.txt`、`format-final.txt`。这轮没有性能测量，不把测试耗时当作曲库性能指标。
 
-正常入口 dev.9 的完整 ZIP 及校验结果将在干净源码构建后补记。
+从干净提交 `26cb05f0e9d5d12501989d4e55cf2e9a63f93164` 重建正常入口 `lib/main.dart` 的 Release（96.8 秒），生成 `D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-dev.9-M5.zip`。ZIP 大小 **20,475,336 字节**，SHA-256 为 `7f53ceabf5c397cfa7830d7c74e26aff503ed36db08fda280881bbe64135376e`；32 个内容文件加清单共 33 个，`version=0.1.0-dev.9+9`、`gitDirty=false`、`channel=development-preview`、`publicReleaseReady=false`。正常应用的 `data/app.so` SHA-256 为 `e05d93dd202b241756decfe864f485a171fdbbe254d08c011868d48ccc29ec50`。
+
+系统 PowerShell **5.1.26100.9444** 下，`tool/verify_windows_preview.ps1 -CheckDataDirectoryLock` 验收通过：ZIP 及全部清单文件哈希一致，包内无 UserData；独立中文/空格目录内由 `Start-HanMusic.cmd` 启动，持续八秒响应，启动器退出码为 0，UserData 与 online 目录在 D 盘创建。运行时目录文件范围锁返回预期 Win32 错误 33；精确核对本轮 PID、EXE 路径和启动时间后终止测试进程，首次重试取得锁（44 ms），测试进程与辅助进程均已清理。
+
+打包日志为 `package-dev9.txt`，元数据为 `package-summary.json`，验收报告归档为 `package-verification-dev9.json`。原报告保留在 `D:\dev\tmp\hanmusic-m5-dev9-package-verification\验收 包 20260930-142252-920-02d41f37\verification.json`。这是开发机上的包完整性、启动响应和目录锁检查；强制终止不等于正常关窗或持久化验收，锁冲突不等于第二实例 UI 验收。
 
 本轮未执行原生文件/目录对话框、真实键鼠、最小化/恢复/正常关窗、真实休眠、音频设备切换或系统 DPI 操作，也未完成无开发工具的干净机器验证。性能跨时段稳定性和正式发行条件继续按 [开发计划](./05-Windows版本开发计划.md) 保留，不以自动测试或开发机启动响应代替。
