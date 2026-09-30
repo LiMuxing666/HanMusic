@@ -140,6 +140,8 @@ dev.6 继续在 D 盘验证数据目录锁、保存失败确认与有界退出�
 
 dev.7 修复曲库连续键盘翻页时焦点丢失，264 项自动测试及最终静态分析通过；两个独立 Windows Release 进程验证了万曲索引和混合队列的保存恢复。正常入口预览从干净提交 `4587d28` 构建，通过系统 PowerShell 5.1 的五项完整性、启动与目录锁检查。SDK 和依赖不变，数据与证据继续存于 D 盘；四轮 Profile、重启探针和预览包验证归档至 `D:\dev\setup\verification\m5-restart-keyboard`，包哈希及验证边界见 [键盘与跨进程恢复验证](./15-Windows-M5键盘与跨进程恢复验证.md)。
 
+随后新增进程限定 PCM 诊断，复用已有 MSVC `14.37.32822` 和 Windows SDK `10.0.22621.0`，不安装新 SDK 或包。诊断 DLL、音频样本及日志存于 `D:\dev\tmp\hanmusic-m5-output-<标识>`，证据归档于 `D:\dev\setup\verification\m5-output`；275 项自动测试通过，本地和回环网络实际 PCM 计时与负对照结果见 [进程音频输出测量](./16-Windows-M5进程音频输出测量.md)。该 DLL 只供开发诊断，未加入正常程序依赖；产品仍为 dev.7。
+
 `tool/package_windows_preview.ps1` 默认将开发预览写入 `D:\dev\releases\HanMusic`，重新构建正常入口并保留完整 Release、NOTICE、许可材料和哈希清单；不要直接打包曾由探针覆盖的 EXE。包内启动器默认把数据放在与 EXE 同目录的 `UserData` 子目录，与开发会话的 `D:\dev\data\HanMusic` 分开；保持 D 盘数据时应将预览解压到 D 盘或按 [预览运行说明](./12-Windows预览运行与验收.md) 指定绝对目录。
 
 当前 Windows JNI DLL 由传递依赖生成，应按完整 Release 保留，不能仅凭该文件推导用户必须安装 JRE；本轮预览不捆绑 JRE 或 VC++ 运行库。VC++ 运行条件、原生许可证和项目自身授权缺口见 [分发检查](./11-Windows依赖与分发检查.md)。M5 原生音频两阶段与全量测试已完成；正常入口预览 ZIP 已通过本机哈希、完整清单及系统 PowerShell 启动器的短时进程检查，详见阶段记录第 8 节。强制结束测试进程不算正常关窗，系统交互、干净机与公开发行条件仍待完成。
