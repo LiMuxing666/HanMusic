@@ -48,6 +48,10 @@ Windows Release 诊断于本机 2026-09-30 18:50 完成，`all` 阶段 **12 项�
 
 ## 5. dev.10 完整预览包
 
-代码与上述验证记录提交后，打包脚本会强制重建正常 `lib/main.dart` 入口，随后补记 ZIP 校验值、清单及开发机启动/数据目录锁验收。诊断构建不作为产品包交付。
+从干净提交 `f25d22fd572c5d5457a1d0f76ce46fbbb8deef3f` 强制重建正常 `lib/main.dart` 入口的 Windows Release（88.2 秒），生成 `D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-dev.10-M5.zip`。ZIP 大小 **20,478,140 字节**，SHA-256 为 `605b1059c27439cd40b13281d481731f0e4c7b960b79fdeb6e86cb24a7ddb802`；32 个内容文件加清单共 33 个，`version=0.1.0-dev.10+10`、`gitDirty=false`、`channel=development-preview`、`publicReleaseReady=false`。正常应用的 `data/app.so` SHA-256 为 `20db0c5ab8999e088c68c9a461bdde6f13d4db75afd23bc0521e1e5ec79c96fe`，与诊断入口二进制不同。
+
+系统 PowerShell **5.1.26100.9444** 下，`tool/verify_windows_preview.ps1 -CheckDataDirectoryLock` 的 5 项包检查通过：ZIP 及全部清单文件哈希一致、包内无 UserData；在独立中文/空格目录内由 `Start-HanMusic.cmd` 启动，持续八秒响应，启动器退出码 0，UserData 与 online 目录在 D 盘创建。运行时目录锁产生预期 Win32 错误 33；核对本轮 PID、EXE 路径和启动时间后停止测试进程，首次重试取得锁（20 ms），测试进程与辅助进程均已清理。
+
+打包/验收日志为 `package-dev10.txt`、`verify-dev10.txt`，元数据为 `package-summary.json`，完整报告归档为 `package-verification-dev10.json`。原报告位于 `D:\dev\tmp\hanmusic-m5-dev10-package-verification\验收 包 20260930-185733-129-19974f15\verification.json`。包检查只覆盖开发机上的完整性、启动响应和目录锁；强制终止不等于正常关窗或持久化验收，锁冲突不等于第二实例 UI 验收。源码提交后只补写验证文档，不因文档更新重建二进制。
 
 本轮不替代真实设备切换、休眠、原生文件对话框、正常系统关窗、真实系统 DPI 或干净机器验收。M5 性能跨时段稳定性及发行条件继续按 [开发计划](./05-Windows版本开发计划.md) 保留。
