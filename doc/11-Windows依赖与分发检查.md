@@ -104,9 +104,13 @@ mpv 指定 commit 的源码可以获取；[音频构建 recipe 仓库](https://g
 
 当前 Release 顶层尚无上述三份 VC++ CRT DLL。可以由用户安装 Microsoft 官方 **x64 v14 Redistributable**，或由打包负责人依许可选择 app-local 可再分发文件。官方要求运行库架构匹配、版本不早于编译工具链；最新下载地址是可变目标，应另记实际安装/附带文件版本与哈希。[Microsoft 官方运行库下载与版本条件](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170)
 
+2026-09-30 dev.11 补充：本机 MSVC 工具链为 14.37.32822，但 VS 附带的 REDIST 目录和安装程序为 14.36.32532.0，不能因其来自 VS 就默认满足本构建下限。System32 中三份 DLL 为 14.51.36247.0，解释了开发机可启动；这些文件没有被收集进包。当前选择中央安装路径，由用户通过 Microsoft 官方 x64 安装程序配置运行库。包内检查器在启动和创建 UserData 前核对实际文件的 PE 架构/数字版本；最低版本从本次 CMake linker 工具链路径生成，清单记录相同要求。没有下载、运行或捆绑安装程序，没有修改本机运行库；无开发工具干净机验收仍保留。
+
 Microsoft 明确把可再分发包及单独 DLL 的分发限制在相应 Visual Studio 授权及许可条款下，并提供 REDIST 清单和开发工具安装目录来源。对外发行时应由发行者核对资格与文件范围，不能从 `System32` 随意收集 DLL。微软推荐中央安装运行库以便服务更新；若选择 app-local，应来自可再分发目录并承担后续更新。[Microsoft Redistribute Visual C++ files](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files?view=msvc-170)
 
 `dartjni.dll` **不是本轮认定的残留文件**：依赖链为 `path_provider → path_provider_android → jni/jni_flutter`，JNI 声明 Windows FFI 插件；`generated_plugins.cmake` 把其 `jni_bundled_libraries` 复制进 Release。本地有 JVM 时 `jni/src/CMakeLists.txt` 会构建该库，`jni/lib/src/jni.dart` 通过惰性的 `DynamicLibrary.open` 加载它。runner 并未直接链接该 DLL，项目 Windows 主路径也未调用 `Jni.spawn`；据此不能推导用户启动应用必须安装 JRE。当前策略是保留正式构建产物、**不捆绑 JRE**，并由干净机验证确认 Windows 路径不依赖本机 Java。
+
+dev.10 实际 `dartjni.dll` 的 PE Delay Import Directory 为 0，`jvm.dll` 属于普通导入；不能把包源码中的 `/DELAYLOAD` 当作该产物已经延迟导入的证据。这里的“惰性”指 Dart 尚未调用 `DynamicLibrary.open`，不指 JVM 的 PE 导入方式。已检查生成的 Windows Dart 插件注册分支只注册文件选择/目录服务，`native_assets.json` 为空；因此本轮运行条件检查不把 JRE/JDK 列为启动前置项。具体文件哈希和导入输出见 [运行条件记录](./21-Windows-M5运行条件与错误布局.md)。
 
 ## 6. 包内材料与对外发行前清单
 

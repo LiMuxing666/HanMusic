@@ -100,3 +100,25 @@ function Invoke-HanMusicNativeLogged {
     } finally { $ErrorActionPreference = $previousPreference }
     if ($nativeExitCode -ne 0) { throw "Native command failed with exit code $nativeExitCode." }
 }
+
+function Get-HanMusicRuntimeRequirements {
+    param([Parameter(Mandatory=$true)][string]$CMakeCache)
+    # Use the toolset that produced this build, not the installed redist or
+    # whatever compiler happens to come first on the packaging shell's PATH.
+    $cache = [IO.File]::ReadAllText($CMakeCache).Replace('\', '/')
+    $linkerLines = @($cache -split '\r?\n' | Where-Object { $_ -match '^CMAKE_LINKER:FILEPATH=' })
+    if ($linkerLines.Count -ne 1 -or
+        $linkerLines[0] -notmatch '/VC/Tools/MSVC/(?<version>14\.\d+\.\d+)/bin/Host(?:x64|x86)/x64/link\.exe\s*$') {
+        throw 'Unable to identify the x64 MSVC toolset from this build CMake cache.'
+    }
+    $minimumVersion = ([version]($Matches.version + '.0')).ToString(4)
+    return [ordered]@{
+        schemaVersion = 1
+        target = 'windows-x64'
+        minimumVCRuntimeVersion = $minimumVersion
+        requiredVCRuntimeDlls = @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+        deployment = 'central'
+        downloadUrl = 'https://aka.ms/vc14/vc_redist.x64.exe'
+        guidanceUrl = 'https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist'
+    }
+}

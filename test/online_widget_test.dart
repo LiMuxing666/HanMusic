@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:han_music/app/core/theme/app_theme.dart';
 import 'package:han_music/app/data/models/song.dart';
@@ -20,6 +21,67 @@ import 'support/fake_audio_backend.dart';
 import 'support/fake_online_music.dart';
 
 void main() {
+  for (final configuration in [
+    (size: const Size(800, 600), scale: 2.0),
+    (size: const Size(1280, 720), scale: 1.0),
+  ]) {
+    testWidgets(
+      'combined playback and search errors remain keyboard reachable at ${configuration.size} scale ${configuration.scale}',
+      (tester) async {
+        await _withOnline(
+          tester,
+          size: configuration.size,
+          scale: configuration.scale,
+          run: (fixture) async {
+            fixture.backend.loadFailure = StateError('controlled load failure');
+            await fixture.player.open(
+              Song(
+                uri: Uri.file('D:/controlled-a11y/broken.wav', windows: true),
+                fileName: 'broken.wav',
+              ),
+            );
+            final playbackError = fixture.player.errorMessage.value;
+            expect(playbackError, isNotNull);
+            fixture.repository.failure = '连接超时，请稍后重试。';
+            await tester.enterText(find.byKey(const Key('online-query')), '夜色');
+            await tester.pump(const Duration(milliseconds: 500));
+            await tester.pumpAndSettle();
+            expect(find.text(playbackError!), findsOneWidget);
+            expect(find.text('连接超时，请稍后重试。'), findsOneWidget);
+            expect(tester.takeException(), isNull);
+
+            // Leaving and returning must keep both errors and their actions.
+            await tester.tap(find.byKey(const Key('nav-0')));
+            await tester.pumpAndSettle();
+            await tester.tap(find.byKey(const Key('nav-3')));
+            await tester.pumpAndSettle();
+            final retry = find.widgetWithText(TextButton, '重试');
+            final transportControl = find.byKey(const Key('play-mode'));
+            final transportBounds = tester.getRect(transportControl);
+            await _tabTo(tester, retry);
+            expect(retry.hitTestable(), findsOneWidget);
+            expect(transportControl.hitTestable(), findsOneWidget);
+            expect(tester.getRect(transportControl), transportBounds);
+            expect(tester.takeException(), isNull);
+
+            fixture.repository.failure = null;
+            await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+            await tester.pumpAndSettle();
+            expect(fixture.repository.requests, hasLength(2));
+            expect(find.text('歌曲 夜色 1'), findsOneWidget);
+            expect(find.text('连接超时，请稍后重试。'), findsNothing);
+            expect(find.text(playbackError), findsOneWidget);
+            await _tabTo(tester, transportControl);
+            expect(transportControl.hitTestable(), findsOneWidget);
+            expect(tester.getRect(transportControl), transportBounds);
+            expect(tester.takeException(), isNull);
+          },
+        );
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+  }
+
   for (final size in [const Size(1280, 720), const Size(800, 600)]) {
     testWidgets('200 percent online states and dialogs fit $size', (
       tester,
@@ -457,6 +519,24 @@ void main() {
 }
 
 final _play = find.byKey(const Key('toggle-playback'));
+
+Future<void> _tabTo(WidgetTester tester, Finder target) async {
+  for (var step = 0; step < 50; step++) {
+    final elements = target.evaluate().toSet();
+    final focused = FocusManager.instance.primaryFocus?.context;
+    if (focused is Element) {
+      var within = elements.contains(focused);
+      focused.visitAncestorElements((element) {
+        within = within || elements.contains(element);
+        return !within;
+      });
+      if (within) return;
+    }
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pumpAndSettle();
+  }
+  fail('Keyboard traversal did not reach $target');
+}
 
 Future<String> _trySourceFieldEdit(
   WidgetTester tester,

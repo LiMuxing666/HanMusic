@@ -42,7 +42,8 @@ $guideFiles = @(Get-ChildItem -LiteralPath (Join-Path $project 'doc') -Filter '1
 if ($auditFiles.Count -ne 1 -or $guideFiles.Count -ne 1) { throw 'Expected exactly one audit and one preview guide.' }
 $audit = $auditFiles[0].FullName
 $guide = $guideFiles[0].FullName
-foreach ($required in @($audit, $guide, (Join-Path $project 'pubspec.lock'))) {
+foreach ($required in @($audit, $guide, (Join-Path $project 'pubspec.lock'),
+        (Join-Path $PSScriptRoot 'windows_runtime_check.ps1'))) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing packaging input: $required" }
 }
 $licenseDirectory = Join-Path $project 'doc\licenses'
@@ -82,6 +83,7 @@ try {
         Remove-Item -LiteralPath $resolvedRelease -Recurse -Force
     }
     Invoke-HanMusicNativeLogged -FilePath $flutter -Arguments @('build','windows','--release','--no-pub','-t','lib/main.dart') -LogPath $buildLog
+    $runtimeRequirements = Get-HanMusicRuntimeRequirements -CMakeCache (Join-Path $project 'build\windows\x64\CMakeCache.txt')
     foreach ($relative in @('han_music.exe', 'flutter_windows.dll', 'libmpv-2.dll',
             'media_kit_libs_windows_audio_plugin.dll', 'data\app.so', 'data\icudtl.dat',
             'data\flutter_assets\NOTICES.Z')) {
@@ -90,6 +92,8 @@ try {
         }
     }
     Copy-Item -LiteralPath $release -Destination $stage -Recurse
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'windows_runtime_check.ps1') -Destination (Join-Path $stage 'Check-Runtime.ps1')
+    [IO.File]::WriteAllText((Join-Path $stage 'RUNTIME-REQUIREMENTS.json'), ($runtimeRequirements | ConvertTo-Json -Depth 4), $utf8)
     Copy-Item -LiteralPath $guide -Destination (Join-Path $stage 'README.md')
     Copy-Item -LiteralPath $audit -Destination (Join-Path $stage 'DISTRIBUTION-AUDIT.md')
     Copy-Item -LiteralPath (Join-Path $project 'pubspec.lock') -Destination (Join-Path $stage 'DEPENDENCIES.lock')
@@ -112,6 +116,15 @@ try {
     [IO.File]::WriteAllText((Join-Path $stage 'Start-HanMusic.ps1'), @'
 param([string]$DataDirectory = (Join-Path $PSScriptRoot 'UserData'))
 $ErrorActionPreference = 'Stop'
+$runtimeJson = & (Join-Path $PSScriptRoot 'Check-Runtime.ps1') -PackageDirectory $PSScriptRoot -AsJson
+$runtimeExit = $LASTEXITCODE
+$runtimeStatus = ($runtimeJson -join "`n") | ConvertFrom-Json
+if ($runtimeExit -ne 0 -or $runtimeStatus.passed -ne $true) {
+    foreach ($issue in $runtimeStatus.issues) { Write-Output $issue.message }
+    Write-Output $runtimeStatus.installationGuidance
+    Write-Output ('Official x64 installer: ' + $runtimeStatus.downloadUrl)
+    throw 'Runtime check failed. Follow the instructions above, then run Start-HanMusic.cmd again.'
+}
 if ($DataDirectory -notmatch '^(?:[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+(?:\\|$))') { throw 'DataDirectory must be absolute.' }
 $dataPath = [IO.Path]::GetFullPath($DataDirectory)
 New-Item -ItemType Directory -Path $dataPath -Force | Out-Null
@@ -132,6 +145,8 @@ Read README.md and DISTRIBUTION-AUDIT.md before testing or redistribution.
 Native system UI, real sleep/resume, clean-machine validation, project licensing,
 and complete native dependency source/notice requirements remain release gates.
 No SDK, Java runtime, or Microsoft Visual C++ redistributable is bundled.
+Check-Runtime.ps1 reads the required x64 runtime DLL versions before launch.
+The launcher does not download, install, or change system prerequisites.
 Launch with Start-HanMusic.cmd to store data in the adjacent UserData folder.
 '@, $utf8)
 
@@ -149,6 +164,7 @@ Launch with Start-HanMusic.cmd to store data in the adjacent UserData folder.
         sdk=[ordered]@{flutter=$sdkVersion.frameworkVersion; frameworkRevision=$sdkVersion.frameworkRevision;
             engineRevision=$sdkVersion.engineRevision; dart=$sdkVersion.dartSdkVersion};
         builtAt=(Get-Date).ToUniversalTime().ToString('o'); publicReleaseReady=$false;
+        runtimeRequirements=$runtimeRequirements;
         files=$inventory; inventoryExcludes=@('BUILD-MANIFEST.json','UserData');
         notes='Inventory hashes cover the packaged files before first launch. ZIP SHA256 also covers the manifest.'
     }

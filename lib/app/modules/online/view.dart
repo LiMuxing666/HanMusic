@@ -13,7 +13,16 @@ class OnlineMusicPage extends StatelessWidget {
   final OnlineMusicController controller;
 
   @override
-  Widget build(BuildContext context) => Column(
+  Widget build(BuildContext context) => CustomScrollView(
+    slivers: [
+      // Controls and notices can exceed the space above the fixed transport at
+      // large text sizes. Keep them in the same scrollable as the lazy results.
+      SliverToBoxAdapter(child: _buildControls(context)),
+      Obx(_buildResults),
+    ],
+  );
+
+  Widget _buildControls(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       Row(
@@ -200,99 +209,105 @@ class OnlineMusicPage extends StatelessWidget {
           ),
         );
       }),
-      Expanded(
-        child: Obx(() {
-          final service = controller.service;
-          final results = service.results.toList();
-          final selected = service.selectedSource;
-          final opening = controller.isOpening.value;
-          final loadingMore = service.isLoadingMore.value;
-          final hasMore = service.hasMore.value;
-          if (selected == null) {
-            return const _OnlineEmpty(
-              icon: Icons.cloud_outlined,
-              title: '连接你的音乐世界',
-              message: '添加一个音乐源，即可搜索并播放在线音乐。',
-            );
-          }
-          if (service.isSearching.value && results.isEmpty) {
-            return const Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 15),
-                  Text('正在搜索…', style: TextStyle(color: _muted)),
-                ],
-              ),
-            );
-          }
-          if (results.isEmpty) {
-            return _OnlineEmpty(
-              icon: service.query.value.trim().isEmpty
-                  ? Icons.travel_explore_rounded
-                  : Icons.search_off_rounded,
-              title: service.query.value.trim().isEmpty
-                  ? '下一首喜欢的歌，就在这里'
-                  : service.errorMessage.value == null
-                  ? '没有找到匹配的音乐'
-                  : '暂时无法获取音乐',
-              message: service.query.value.trim().isEmpty
-                  ? '输入关键词开始搜索。'
-                  : '换个关键词，或检查音乐源后重试。',
-            );
-          }
-          return Column(
-            children: [
-              if (service.isSearching.value)
-                const LinearProgressIndicator(minHeight: 2),
-              Expanded(
-                child: ListView.builder(
-                  key: const Key('online-results'),
-                  itemCount: results.length + 1,
-                  itemBuilder: (context, index) {
-                    if (index == results.length) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        child: Center(
-                          child: loadingMore
-                              ? const SizedBox.square(
-                                  dimension: 22,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : hasMore
-                              ? OutlinedButton(
-                                  key: const Key('online-load-more'),
-                                  onPressed: service.isSearching.value
-                                      ? null
-                                      : controller.loadMore,
-                                  child: const Text('加载更多'),
-                                )
-                              : const Text(
-                                  '已经到底了',
-                                  style: TextStyle(color: _muted, fontSize: 12),
-                                ),
-                        ),
-                      );
-                    }
-                    final song = results[index];
-                    return _OnlineSongRow(
-                      song: song,
-                      sourceName: selected.name,
-                      onPlay: opening ? null : () => controller.play(song),
-                      onQueue: () => controller.enqueue(song),
-                    );
-                  },
-                ),
-              ),
-            ],
-          );
-        }),
-      ),
     ],
   );
+
+  Widget _buildResults() {
+    final service = controller.service;
+    final results = service.results.toList();
+    final selected = service.selectedSource;
+    final opening = controller.isOpening.value;
+    final loadingMore = service.isLoadingMore.value;
+    final hasMore = service.hasMore.value;
+    if (selected == null) {
+      return const SliverFillRemaining(
+        hasScrollBody: false,
+        child: _OnlineEmpty(
+          icon: Icons.cloud_outlined,
+          title: '连接你的音乐世界',
+          message: '添加一个音乐源，即可搜索并播放在线音乐。',
+        ),
+      );
+    }
+    if (service.isSearching.value && results.isEmpty) {
+      return const SliverFillRemaining(
+        hasScrollBody: false,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 15),
+              Text('正在搜索…', style: TextStyle(color: _muted)),
+            ],
+          ),
+        ),
+      );
+    }
+    if (results.isEmpty) {
+      return SliverFillRemaining(
+        hasScrollBody: false,
+        child: _OnlineEmpty(
+          icon: service.query.value.trim().isEmpty
+              ? Icons.travel_explore_rounded
+              : Icons.search_off_rounded,
+          title: service.query.value.trim().isEmpty
+              ? '下一首喜欢的歌，就在这里'
+              : service.errorMessage.value == null
+              ? '没有找到匹配的音乐'
+              : '暂时无法获取音乐',
+          message: service.query.value.trim().isEmpty
+              ? '输入关键词开始搜索。'
+              : '换个关键词，或检查音乐源后重试。',
+        ),
+      );
+    }
+    return SliverMainAxisGroup(
+      slivers: [
+        if (service.isSearching.value)
+          const SliverToBoxAdapter(
+            child: LinearProgressIndicator(minHeight: 2),
+          ),
+        SliverList.builder(
+          key: const Key('online-results'),
+          itemCount: results.length + 1,
+          itemBuilder: (context, index) {
+            if (index == results.length) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Center(
+                  child: loadingMore
+                      ? const SizedBox.square(
+                          dimension: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : hasMore
+                      ? OutlinedButton(
+                          key: const Key('online-load-more'),
+                          onPressed: service.isSearching.value
+                              ? null
+                              : controller.loadMore,
+                          child: const Text('加载更多'),
+                        )
+                      : const Text(
+                          '已经到底了',
+                          style: TextStyle(color: _muted, fontSize: 12),
+                        ),
+                ),
+              );
+            }
+            final song = results[index];
+            return _OnlineSongRow(
+              song: song,
+              sourceName: selected.name,
+              onPlay: opening ? null : () => controller.play(song),
+              onQueue: () => controller.enqueue(song),
+            );
+          },
+        ),
+      ],
+    );
+  }
 }
 
 class _OnlineSongRow extends StatelessWidget {
@@ -388,7 +403,7 @@ class _OnlineEmpty extends StatelessWidget {
   final String message;
   @override
   Widget build(BuildContext context) => Center(
-    child: SingleChildScrollView(
+    child: Padding(
       padding: const EdgeInsets.all(18),
       child: Column(
         mainAxisSize: MainAxisSize.min,

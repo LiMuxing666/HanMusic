@@ -249,6 +249,27 @@ try {
 
     $systemPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     if (-not (Test-Path -LiteralPath $systemPowerShell -PathType Leaf)) { throw 'System Windows PowerShell is unavailable.' }
+    $runtimeChecker = Join-Path $package 'Check-Runtime.ps1'
+    $runtimeRequirementsPath = Join-Path $package 'RUNTIME-REQUIREMENTS.json'
+    $hasRuntimeDeclaration = $null -ne $manifest.PSObject.Properties['runtimeRequirements']
+    $hasRuntimeChecker = Test-Path -LiteralPath $runtimeChecker -PathType Leaf
+    $hasRuntimeRequirements = Test-Path -LiteralPath $runtimeRequirementsPath -PathType Leaf
+    if ($hasRuntimeDeclaration -or $hasRuntimeChecker -or $hasRuntimeRequirements) {
+        if (-not ($hasRuntimeDeclaration -and $hasRuntimeChecker -and $hasRuntimeRequirements)) {
+            throw 'Runtime declaration and checker must be packaged together.'
+        }
+        $requirements = [IO.File]::ReadAllText($runtimeRequirementsPath) | ConvertFrom-Json
+        if (($requirements | ConvertTo-Json -Depth 4 -Compress) -cne
+            ($manifest.runtimeRequirements | ConvertTo-Json -Depth 4 -Compress)) {
+            throw 'Runtime requirements differ from the build manifest.'
+        }
+        $runtimeJson = & $systemPowerShell -NoProfile -ExecutionPolicy Bypass -File $runtimeChecker -PackageDirectory $package -AsJson
+        $runtimeExit = $LASTEXITCODE
+        $runtimeStatus = ($runtimeJson -join "`n") | ConvertFrom-Json
+        $report['runtime'] = $runtimeStatus
+        if ($runtimeExit -ne 0 -or $runtimeStatus.passed -ne $true) { throw 'Packaged runtime preflight failed.' }
+        $report.checks += [ordered]@{name = 'declared_x64_runtime_preflight'; passed = $true}
+    }
     if (Test-Path -LiteralPath (Join-Path $package 'powershell.exe')) { throw 'Packaged executable would shadow system Windows PowerShell.' }
     $cmdText = [IO.File]::ReadAllText($launcher)
     if ($cmdText -notmatch '(?im)^powershell\.exe\s+-NoProfile\s+-ExecutionPolicy\s+Bypass\s+-File\s+"%~dp0Start-HanMusic\.ps1"\s*$') {

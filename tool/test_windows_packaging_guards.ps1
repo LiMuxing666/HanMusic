@@ -72,4 +72,28 @@ $rejected = $false
 try { Invoke-HanMusicNativeLogged -FilePath $stockPowerShell -Arguments @('-NoProfile','-File',$nativeFixture,'-Code','7') -LogPath $nativeLog }
 catch { if ($_.Exception.Message -notlike '*exit code 7*') { throw }; $rejected = $true }
 if (-not $rejected) { throw 'Native nonzero exit was accepted.' }
-Write-Output '9 packaging guard checks passed; external marker, existing preview and build executable preserved.'
+$cacheFixture = Join-Path $scratch 'runtime-CMakeCache.txt'
+$runtimeCases = @(
+    @{Name='current-x64'; Content='CMAKE_LINKER:FILEPATH=C:/VS/VC/Tools/MSVC/14.37.32822/bin/Hostx64/x64/link.exe'; Expected='14.37.32822.0'},
+    @{Name='newer-x86-host'; Content='CMAKE_LINKER:FILEPATH=D:\VS\VC\Tools\MSVC\14.50.12345\bin\Hostx86\x64\link.exe'; Expected='14.50.12345.0'},
+    @{Name='missing-linker'; Content='CMAKE_BUILD_TYPE:STRING=Release'; Expected=$null},
+    @{Name='ambiguous-linker'; Content=("CMAKE_LINKER:FILEPATH=C:/VS/VC/Tools/MSVC/14.37.32822/bin/Hostx64/x64/link.exe`nCMAKE_LINKER:FILEPATH=C:/VS/VC/Tools/MSVC/14.50.12345/bin/Hostx64/x64/link.exe"); Expected=$null},
+    @{Name='arm64-target'; Content='CMAKE_LINKER:FILEPATH=C:/VS/VC/Tools/MSVC/14.37.32822/bin/Hostx64/arm64/link.exe'; Expected=$null},
+    @{Name='malformed-version'; Content='CMAKE_LINKER:FILEPATH=C:/VS/VC/Tools/MSVC/latest/bin/Hostx64/x64/link.exe'; Expected=$null}
+)
+foreach ($case in $runtimeCases) {
+    [IO.File]::WriteAllText($cacheFixture, $case.Content)
+    $rejected = $false
+    try { $requirements = Get-HanMusicRuntimeRequirements -CMakeCache $cacheFixture }
+    catch {
+        if ($null -ne $case.Expected -or $_.Exception.Message -notlike '*x64 MSVC toolset*') { throw }
+        $rejected = $true
+    }
+    if ($null -eq $case.Expected) {
+        if (-not $rejected) { throw "Invalid runtime toolset accepted: $($case.Name)" }
+    } elseif ($requirements.minimumVCRuntimeVersion -ne $case.Expected -or
+        $requirements.target -ne 'windows-x64' -or $requirements.requiredVCRuntimeDlls.Count -ne 3) {
+        throw "Incorrect runtime requirements: $($case.Name)"
+    }
+}
+Write-Output '15 packaging guard checks passed; external marker, existing preview and build executable preserved.'

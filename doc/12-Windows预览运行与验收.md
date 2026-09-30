@@ -1,11 +1,11 @@
 # HanMusic Windows 开发预览：运行与手工验收
 
-本包为 Windows x64 **0.1.0-dev.10+10 开发预览**，不是已完成发行验收的 v0.1。包含完整 Flutter Release 目录、启动器、文件校验清单及依赖说明；没有安装器、数字签名或自动更新。
+本包为 Windows x64 **0.1.0-dev.11+11 开发预览**，不是已完成发行验收的 v0.1。包含完整 Flutter Release 目录、启动器、文件校验清单及依赖说明；没有安装器、数字签名或自动更新。
 
 ## 运行
 
 1. 将整个 ZIP 解压到可写目录，例如 `D:\Apps\HanMusic`。不要直接从 ZIP 内运行，也不要只复制 EXE。
-2. 双击 `Start-HanMusic.cmd`。启动器检查目录可写，然后使用同目录 `UserData` 保存曲库索引、队列、在线源和封面。解压到 D 盘即可使这些数据留在 D 盘。
+2. 双击 `Start-HanMusic.cmd`。启动器先检查 x64 VC++ 运行库，再检查目录可写，然后使用同目录 `UserData` 保存曲库索引、队列、在线源和封面。解压到 D 盘即可使这些数据留在 D 盘。运行库检查失败时按提示使用 Microsoft 官方安装程序，完成后重启启动器。
 3. 导入文件或文件夹后，在曲库中点击歌曲播放。当前支持本地曲库、队列/四种模式、睡眠定时，以及通用匿名 JSON HTTP(S) 网络源。
 4. 退出前关闭应用窗口。复制或升级包时，可在应用关闭后把 `UserData` 复制到新目录，保留原备份；本次开发机上的强制结束冒烟检查不等于已验证正常关窗。
 
@@ -28,6 +28,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-HanMusic.ps1 -Da
 - 本机已验证 Windows 11 x64 Build 26200；Windows 10、ARM64 和未安装开发工具的干净系统尚未完成实测。
 - 程序运行无需 Flutter/Visual Studio SDK。不要移除 Flutter DLL、`libmpv-2.dll`、音频插件、`dartjni.dll` 或 `data`。
 - 本包没有捆绑 Microsoft Visual C++ 运行库；出现 `MSVCP140.dll` / `VCRUNTIME140.dll` 等缺失提示时，使用 Microsoft 官方 x64 v14 运行库安装程序。具体版本要求、官方链接和当前 JNI 分析见包内 `DISTRIBUTION-AUDIT.md`，源码仓库对应 `doc/11-Windows依赖与分发检查.md`。不因存在 JNI 文件而直接要求用户安装 JRE。
+- dev.11 的 `Check-Runtime.ps1` 读取 EXE 旁或 Windows 系统目录中的三份 VC++ DLL，检查其 x64 架构与最低版本。若 EXE 旁已经存在错误 DLL，不会忽略它并把系统目录中的正常副本算作通过；请重新解压可信完整包，勿从随机网站下载单个 DLL。本机工具链要求下限为 14.37.32822.0，其他构建以随包要求为准。
+- 可单独运行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Check-Runtime.ps1`，加 `-AsJson` 得到结构化结果。检查通过仅表示已声明运行库的文件条件满足，不代表干净机器、所有 DLL 加载或完整功能已验证。它不安装软件、不创建 UserData，也不修改 PATH。
 - 若被 Windows 标记为未识别的应用，先核对 ZIP SHA-256、来源和文件清单。包尚未签名；本手册不要求关闭系统安全防护。
 - 只移除曲库索引，不删除源音乐文件。源文件移动或磁盘断开后，使用曲库的文件检查，再按提示处理缺失项。
 - 读取到较新 schema 或损坏且无有效备份的数据时，会保留原文件并提示无法保存更改；不要直接用空文件覆盖原数据。
@@ -41,6 +43,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-HanMusic.ps1 -Da
 | `Start-HanMusic.cmd` / `.ps1` | 以相邻 `UserData` 或指定绝对目录启动 |
 | `han_music.exe`、DLL、`data/` | 正常 `lib/main.dart` Release 应用；必须一起保留 |
 | `BUILD-MANIFEST.json` | 版本、源码提交、是否有未提交改动、逐文件大小与 SHA-256；不把工作区未提交状态描述为干净提交 |
+| `Check-Runtime.ps1`、`RUNTIME-REQUIREMENTS.json` | 启动前运行库检查、构建工具链对应的最低版本；要求同时记入构建清单 |
 | `THIRD-PARTY-NOTICES.txt` | 展开的 Flutter/Dart 依赖通知；不能代替原生媒体库的独立许可 |
 | `licenses/`、`DISTRIBUTION-AUDIT.md` | 已核对的额外许可材料与尚未解决的对外分发条件 |
 | `DEPENDENCIES.lock` | 构建使用的 Dart 依赖版本 |
@@ -63,6 +66,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-HanMusic.ps1 -Da
 | 网络源保存等待 | 测试并保存一个源，在请求等待期间尝试编辑 JSON 和关键词；失败后修改并重试 | 等待时字段只读，失败保留内容并恢复编辑；成功保存提交时的配置 |
 | 网络源保存期间退出 | 提交配置后在保存尚未完成时请求退出；使用独立测试目录验证失败后返回和重试 | 未完成的配置保存纳入退出检查；失败/超时需确认，返回后仍可编辑，不误关闭退出确认框 |
 | 进度拖动中重载 | 拖动但不松手时让当前歌曲发生受控加载错误，再重载同一歌曲并松手 | 旧预览和手势失效，不跳到旧目标；新拖动仍正常提交 |
+| 紧凑窗口组合错误 | 800×600 下放大字号，在线搜索失败时同时存在播放错误 | 播放错误、搜索错误和重试均可滚动访问；键盘可重试并返回固定播放条 |
 | 系统缩放 | 分别设置 100%/150%/200%，重开应用，检查导航、曲库、在线源编辑、定时弹窗及固定播放条 | 关键操作可达，无遮挡和溢出；字号模拟测试不替代此项 |
 | 键盘曲库翻页 | Tab 到歌曲行，连续 PageDown / PageUp，再 Tab 到固定播放按钮并按 Space | 分页持续响应；能离开列表控制播放；输入框和弹窗保持各自键盘行为 |
 | 队列键盘反馈 | 打开播放队列，Tab 到歌曲标题，再调整队列顺序并按 Enter；另用鼠标悬停标题 | 焦点和悬停高亮可见，重排后仍播放当前聚焦的歌曲；缺失项保持禁用 |
