@@ -44,4 +44,10 @@ A/B 摘要为 `ab-summary.json`，额外对照为 `historical-control.*`；测�
 
 撤回样式候选后的全量 `flutter test --no-pub --reporter expanded` **283 项通过**（40 秒）；`dart analyze lib test tool` 无问题，`dart format lib test tool` 检查 78 个文件、无格式变化。日志为 `tests-final.txt`、`analyze-final.txt`、`format.txt`。最终产品差异只有队列标题局部 Material 及版本号，曲库行恢复原有样式处理。
 
-正常入口 dev.8 的完整预览打包及校验在构建完成后补记。万曲 16.7 ms 目标与跨时段稳定性、物理出声/完整页面起播、原生窗口与文件对话框、真实休眠/设备变化/系统 DPI、干净机器及发行许可门槛仍按 [开发计划](./05-Windows版本开发计划.md) 执行。
+从干净提交 `cfe094d76228a3b1ba0a7958529ecd3c64f57c99` 重建正常入口 `lib/main.dart` 的 Release（102.8 秒），生成 `D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-dev.8-M5.zip`。版本为 `0.1.0-dev.8+8`，ZIP 大小 **20,474,532 字节**，SHA-256 为 `35e198b45fe6b287e293a285cffa4a79ea91e07e883877d0ccc99e1b7f86b02f`。32 个内容文件加清单共 33 个文件，`gitDirty=false`、`channel=development-preview`、`publicReleaseReady=false`；正常应用的 `data/app.so` SHA-256 为 `29388363ce57e28f437388fb29a178411217d6a8cef283db2459fe9816aaf1f1`，未将性能探针打入预览包。
+
+通过系统 PowerShell **5.1.26100.9444** 执行 `tool/verify_windows_preview.ps1 -CheckDataDirectoryLock`，在 D 盘独立中文、空格路径解压后验收通过：ZIP 校验和及全部内容文件哈希一致，包内没有 UserData；经 `Start-HanMusic.cmd` 启动后持续八秒响应，启动器退出码为 0，数据写入包内 D 盘 UserData。运行时文件范围锁产生预期 Win32 错误 33；核对 PID、EXE 路径及启动时间后终止本轮测试进程，首次重试即重新取得锁（21 ms），测试进程与启动辅助进程均已清理。
+
+构建日志为 `package-dev8.txt`，完整验收报告归档为 `package-verification-dev8.json`，原始报告保留在 `D:\dev\tmp\hanmusic-m5-dev8-package-verification\验收 包 20260930-133344-048-b37d9e9f\verification.json`。本次是开发机上的完整性、启动响应及目录锁验证；强制终止不代表正常关窗或持久化验收，锁冲突不代表第二实例 UI 验收，也没有执行页面播放或干净机器测试。
+
+万曲 16.7 ms 目标与跨时段稳定性、物理出声/完整页面起播、原生窗口与文件对话框、真实休眠/设备变化/系统 DPI、干净机器及发行许可门槛仍按 [开发计划](./05-Windows版本开发计划.md) 执行。
