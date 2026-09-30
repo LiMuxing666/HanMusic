@@ -725,40 +725,44 @@ class _QueueView extends StatelessWidget {
                     _SongThumbnail(song: song, size: 36),
                     const SizedBox(width: 10),
                     Expanded(
-                      child: InkWell(
-                        onTap: song.isMissing
-                            ? null
-                            : () => controller.playQueueItem(index),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              song.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: song.isMissing
-                                    ? _muted
-                                    : song.id == current
-                                    ? _green
-                                    : null,
+                      // Paint title feedback above the opaque queue-row fill.
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: InkWell(
+                          onTap: song.isMissing
+                              ? null
+                              : () => controller.playQueueItem(index),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                song.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: song.isMissing
+                                      ? _muted
+                                      : song.id == current
+                                      ? _green
+                                      : null,
+                                ),
                               ),
-                            ),
-                            Text(
-                              song.isMissing
-                                  ? '文件缺失'
-                                  : song.isOnline
-                                  ? '${controller.sourceLabel(song)} · ${song.artist ?? '未知歌手'}'
-                                  : song.artist ?? '未知歌手',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: _muted,
-                                fontSize: 12,
+                              Text(
+                                song.isMissing
+                                    ? '文件缺失'
+                                    : song.isOnline
+                                    ? '${controller.sourceLabel(song)} · ${song.artist ?? '未知歌手'}'
+                                    : song.artist ?? '未知歌手',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: _muted,
+                                  fontSize: 12,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),

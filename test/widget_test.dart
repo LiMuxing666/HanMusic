@@ -698,6 +698,103 @@ void main() {
     );
   });
 
+  for (final configuration in [
+    (size: const Size(1280, 720), scale: 1.0),
+    (size: const Size(800, 600), scale: 2.0),
+  ]) {
+    for (final interaction in ['hover', 'keyboard focus']) {
+      testWidgets(
+        'queue title $interaction is visible and Enter plays the focused song at ${configuration.size} scale ${configuration.scale}',
+        (tester) async {
+          final captureKey = GlobalKey();
+          await _withPlayer(
+            tester,
+            withLibrary: true,
+            size: configuration.size,
+            textScale: configuration.scale,
+            captureKey: captureKey,
+            run: (fixture) async {
+              final songs = _librarySongs(3);
+              final target = songs[1];
+              fixture.player.addToQueue(songs);
+              await tester.tap(find.byKey(const Key('nav-2')));
+              await tester.pumpAndSettle();
+              final row = find.byKey(ValueKey('queue-song-${target.id}'));
+              final title = find.ancestor(
+                of: find.descendant(of: row, matching: find.text(target.title)),
+                matching: find.byType(InkWell),
+              );
+              expect(title, findsOneWidget);
+              final bounds = tester.getRect(title);
+              // This lies inside the title's hit area but above its glyphs.
+              final feedbackPoint = Offset(bounds.right - 4, bounds.top + 2);
+              final neutral = await _capturePagePixels(tester, captureKey);
+              expect(
+                neutral.colorAt(feedbackPoint),
+                HanMusicTheme.light.colorScheme.surface,
+              );
+
+              Future<void> focusTitle() async {
+                for (var step = 0; step < 100; step++) {
+                  await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+                  await tester.pumpAndSettle();
+                  if (_primaryFocusWithin(title)) return;
+                }
+                fail('Keyboard traversal did not reach the queue title.');
+              }
+
+              if (interaction == 'hover') {
+                final mouse = await tester.createGesture(
+                  kind: PointerDeviceKind.mouse,
+                );
+                await mouse.addPointer(location: const Offset(1, 1));
+                try {
+                  await mouse.moveTo(feedbackPoint);
+                  await tester.pumpAndSettle();
+                  final hovered = await _capturePagePixels(tester, captureKey);
+                  expect(
+                    hovered.colorAt(feedbackPoint),
+                    isNot(neutral.colorAt(feedbackPoint)),
+                    reason:
+                        'Queue title hover must be visible above its row background.',
+                  );
+                } finally {
+                  await mouse.removePointer();
+                  await tester.pumpAndSettle();
+                }
+              }
+
+              await focusTitle();
+              final focused = await _capturePagePixels(tester, captureKey);
+              expect(
+                focused.colorAt(feedbackPoint),
+                isNot(neutral.colorAt(feedbackPoint)),
+                reason:
+                    'Queue title keyboard focus must be visible above its row background.',
+              );
+              expect(fixture.backend.playCalls, 0);
+              if (interaction == 'keyboard focus') {
+                final focus = FocusManager.instance.primaryFocus;
+                fixture.controller.reorderQueue(1, 0);
+                await tester.pumpAndSettle();
+                expect(fixture.player.queue.first.id, target.id);
+                expect(FocusManager.instance.primaryFocus, same(focus));
+                expect(_primaryFocusWithin(title), isTrue);
+              }
+              await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+              await tester.pumpAndSettle();
+              expect(fixture.player.currentSong.value?.id, target.id);
+              expect(fixture.backend.loadedUris, [target.uri]);
+              expect(fixture.backend.playCalls, 1);
+              expect(tester.takeException(), isNull);
+            },
+          );
+        },
+        variant: TargetPlatformVariant.only(TargetPlatform.windows),
+      );
+    }
+  }
+
   testWidgets(
     'library removal explains source files stay and queue order can change',
     (tester) async {
