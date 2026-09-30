@@ -38,6 +38,10 @@ JNI 另行核对：dev.10 的 `dartjni.dll` 普通导入 `jvm.dll`，Delay Impor
 
 **15 项打包保护检查通过**，新增 6 项工具链识别用例覆盖当前 x64、新版工具链/x86 host、缺失、歧义、ARM64 target 和无版本路径。原有越界/已有输出/目录链接保护及原生命令 stderr/退出码检查保留，既有包、外部标记和构建 EXE 未被拒绝的请求修改。证据为 `packaging-guards.txt`；文档 5 份、54 个本地链接有效，Git 差异检查通过。
 
-dev.11 完整预览包将在干净代码提交后重建正常 `lib/main.dart`，包结果另行补记。
+从干净提交 `336a7900c6f8f0c6a5813922b4f8fcb9b45e4842` 强制重建正常 `lib/main.dart` 入口（132.5 秒），生成 `D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-dev.11-M5.zip`。大小 **20,492,607 字节**，SHA-256 为 `ca87a153c51af8b2f69114860162663998038993d43347672e775fd14f46d64a`；34 个内容文件加清单共 **35 个**，新增两份运行库检查/要求文件。清单记录 `version=0.1.0-dev.11+11`、`gitDirty=false`、`entryPoint=lib/main.dart`、`publicReleaseReady=false`，运行库下限为 14.37.32822.0。正常应用 `data/app.so` SHA-256 为 `f666e8f769103544bc0af941288a6f621c0491cb426ea041756b23b210e7ef4e`。
+
+系统 PowerShell **5.1.26100.9444** 下实际解压包 **6 项验收通过**：ZIP 哈希、全部清单文件/路径与无 UserData、运行库声明和实际检查、经 `Start-HanMusic.cmd` 启动后八秒响应、运行时数据目录锁冲突、停止后释放锁。运行库结果仍是 System32 的三份 14.51.36247.0 x64 DLL；没有因包检查成功而宣称机器缺少运行库时已经可运行。
+
+应用及启动辅助进程均已按本次 PID、绝对 EXE 路径和启动时间核对后清理，锁首次重试即取得（32 ms）。这次强制停止不代表正常关窗、退出保存或第二实例 UI 验收。日志和元数据为 `package-dev11.txt`、`verify-dev11.txt`、`package-summary.json`，完整报告为 `package-verification-dev11.json`；原件位于 `D:\dev\tmp\hanmusic-m5-dev11-package-verification\验收 包 20260930-202353-656-1d61f9da\verification.json`。源码提交后只补写文档，不因文档更新重建二进制。
 
 本轮没有变更音频后端，也不重复把上一轮原生音频/PCM 结果当成本轮新测试。真实系统文件对话框、最小化/正常关窗、休眠、设备变化、物理出声、真实 DPI、性能跨时段稳定性、干净机器和发行授权/原生源码材料仍按 [开发计划](./05-Windows版本开发计划.md) 保留。
