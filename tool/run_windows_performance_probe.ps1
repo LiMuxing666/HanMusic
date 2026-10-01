@@ -8,6 +8,8 @@ Dart compile-time constant: an environment variable cannot redirect this probe.
 Freeze the entire baseline bundle before building a candidate. Run A/B serially
 with unique RunName values and the same ProbeDirectory, display and workload.
 Do not attach DevTools/CPU collectors or run builds/tests during these captures.
+Use -CollectEnvironment for optional one-second read-only host/process samples.
+Use the same setting for every A/B run; sampling overhead is recorded separately.
 
 The caller is responsible for the selected bundle's entry point and compile
 constant. This script validates the resulting capture, not the performance goal.
@@ -24,7 +26,8 @@ param(
     [Parameter(Mandatory=$true)][string]$BundleDirectory,
     [Parameter(Mandatory=$true)][string]$EvidenceDirectory,
     [Parameter(Mandatory=$true)][string]$RunName,
-    [string]$ProbeDirectory = 'D:\dev\tmp\hanmusic-m5-performance'
+    [string]$ProbeDirectory = 'D:\dev\tmp\hanmusic-m5-performance',
+    [switch]$CollectEnvironment
 )
 
 $ErrorActionPreference = 'Stop'
@@ -163,6 +166,35 @@ function Test-CaptureEvidence {
         @($result.frameworkErrors).Count -ne 0 -or $result.environment.metricsChangesDuringMeasurement -ne 0 -or
         @($result.environment.lifecycleEvents).Count -ne 0 -or $result.environment.textScale -ne 1) {
         throw 'Probe workload, mode, lifecycle, metrics or framework-error validation failed.'
+    }
+    # Legacy frozen probes have no accessibility snapshot. Preserve their
+    # validity without inventing a state; new captures must be well-formed and
+    # stable throughout the measurement interval.
+    if ($result.environment.PSObject.Properties.Name -contains 'accessibility') {
+        $accessibility = $result.environment.accessibility
+        if ($null -eq $accessibility -or
+            -not ($accessibility.PSObject.Properties.Name -contains 'changesDuringMeasurement') -or
+            @($accessibility.changesDuringMeasurement).Count -ne 0) {
+            throw 'Accessibility changed during measurement or its evidence is incomplete.'
+        }
+        $featureNames = @('accessibleNavigation','invertColors','disableAnimations','boldText','reduceMotion','highContrast','onOffSwitchLabels','supportsAnnounce')
+        foreach ($snapshotName in @('initial','measurementStart','measurementEnd')) {
+            $snapshot = $accessibility.$snapshotName
+            if ($null -eq $snapshot -or $snapshot.semanticsEnabled -isnot [bool]) {
+                throw 'Accessibility snapshot is incomplete or malformed.'
+            }
+            foreach ($feature in $featureNames) {
+                if ($snapshot.features.$feature -isnot [bool]) { throw 'Accessibility feature is missing or malformed.' }
+            }
+        }
+        if ($accessibility.measurementStart.semanticsEnabled -ne $accessibility.measurementEnd.semanticsEnabled) {
+            throw 'Accessibility semantics state changed during measurement.'
+        }
+        foreach ($feature in $featureNames) {
+            if ($accessibility.measurementStart.features.$feature -ne $accessibility.measurementEnd.features.$feature) {
+                throw 'Accessibility feature state changed during measurement.'
+            }
+        }
     }
     $seconds = Get-FiniteNumber $result.sampling.actualMeasurementSeconds 'actualMeasurementSeconds'
     if ($seconds -lt 30 -or $seconds -gt 32) { throw 'The sample did not cover a stable 30-second window (allowed 30..32 s).' }
@@ -307,6 +339,14 @@ $process = $null
 $sessionHandle = $null
 $probeLockHandle = $null
 $processWatch = $null
+$environmentCollector = $null
+$environmentSamples = New-Object 'System.Collections.Generic.List[object]'
+$metadata.environment = [ordered]@{
+    requested = [bool]$CollectEnvironment; sampleIntervalMs = 1000
+    initializationMs = $null; setupError = $null; stopError = $null
+    samples = $environmentSamples
+    limitations = 'Optional low-frequency observations, not CPU-thread attribution or proof of thermal throttling. Compare runs with identical collection settings.'
+}
 try {
     $null = [IO.Directory]::CreateDirectory($evidence)
     $null = [IO.Directory]::CreateDirectory($probe)
@@ -327,6 +367,20 @@ try {
             }
         }
     }
+    if ($CollectEnvironment) {
+        # Compile native declarations and warm the PDH query before launching
+        # the workload. Missing counters are evidence gaps, not benchmark errors.
+        $initializationWatch = [Diagnostics.Stopwatch]::StartNew()
+        try {
+            . (Join-Path $PSScriptRoot 'windows_performance_environment.ps1')
+            $environmentCollector = Start-HanMusicPerformanceEnvironment
+            $environmentSamples.Add((Read-HanMusicPerformanceEnvironment -Collector $environmentCollector))
+        } catch {
+            $metadata.environment.setupError = $_.Exception.Message
+        } finally {
+            $metadata.environment.initializationMs = $initializationWatch.Elapsed.TotalMilliseconds
+        }
+    }
     $launched = [DateTime]::UtcNow
     $metadata.launchedAtUtc = $launched.ToString('o')
     $processWatch = [Diagnostics.Stopwatch]::StartNew()
@@ -334,8 +388,18 @@ try {
     $null = $process.Handle # Retain before waiting: required for reliable PS5.1 ExitCode.
     $metadata.processId = $process.Id
     $metadata.processStartTicks = $process.StartTime.ToUniversalTime().Ticks
+    $nextEnvironmentMs = 0
     while (-not $process.WaitForExit(250)) {
         if ($processWatch.Elapsed.TotalSeconds -ge 120) { throw 'Profile probe exceeded its 120-second deadline.' }
+        if ($environmentCollector -and $processWatch.ElapsedMilliseconds -ge $nextEnvironmentMs) {
+            try {
+                $environmentSamples.Add((Read-HanMusicPerformanceEnvironment -Collector $environmentCollector -TargetProcess $process))
+            } catch {
+                $environmentSamples.Add([ordered]@{utc=[DateTime]::UtcNow.ToString('o'); status='unavailable'; error=$_.Exception.Message})
+            }
+            # Do not produce catch-up bursts if an observation was slow.
+            $nextEnvironmentMs = $processWatch.ElapsedMilliseconds + 1000
+        }
     }
     $ended = [DateTime]::UtcNow
     $metadata.processWallMs = $processWatch.ElapsedMilliseconds
@@ -384,6 +448,10 @@ try {
             } catch { $metadata.cleanupError = $_.Exception.Message }
         }
     } finally {
+        if ($environmentCollector) {
+            try { Stop-HanMusicPerformanceEnvironment -Collector $environmentCollector }
+            catch { $metadata.environment.stopError = $_.Exception.Message }
+        }
         $metadata.finishedAtUtc = [DateTime]::UtcNow.ToString('o')
         if ($sessionHandle) {
             try {

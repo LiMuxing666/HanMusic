@@ -120,6 +120,12 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
   final _timings = <FrameTiming>[];
   final _memory = <Map<String, Object?>>[];
   final _lifecycle = <String>[];
+  final _accessibilityChanges = <Map<String, Object?>>[];
+  late final Map<String, Object?> _initialAccessibility;
+  Map<String, Object?>? _measurementStartAccessibility;
+  Map<String, Object?>? _measurementEndAccessibility;
+  late bool _lastSemanticsEnabled;
+  late AccessibilityFeatures _lastAccessibilityFeatures;
   late final Ticker _ticker;
   Timer? _memoryTimer;
   Timer? _watchdog;
@@ -147,6 +153,10 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _lastSemanticsEnabled = WidgetsBinding.instance.semanticsEnabled;
+    _lastAccessibilityFeatures = WidgetsBinding.instance.accessibilityFeatures;
+    _initialAccessibility = _accessibilitySnapshot();
+    WidgetsBinding.instance.addSemanticsEnabledListener(_onSemanticsChanged);
     SchedulerBinding.instance.addTimingsCallback(_onTimings);
     _ticker = createTicker(_onTick);
     _watchdog = Timer(const Duration(seconds: 90), () {
@@ -184,6 +194,8 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
       _startUs =
           SchedulerBinding.instance.currentSystemFrameTimeStamp.inMicroseconds;
       _measurementStartedAt = elapsed;
+      // One boundary snapshot, not a query on every measured frame.
+      _measurementStartAccessibility = _accessibilitySnapshot();
       _previousOffset = offset;
     }
     if (_startUs != null) {
@@ -232,9 +244,56 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
     _lifecycle.add('${_lastElapsed.inMilliseconds}ms:${state.name}');
   }
 
+  Map<String, Object?> _accessibilitySnapshot() {
+    final binding = WidgetsBinding.instance;
+    final features = binding.accessibilityFeatures;
+    return {
+      // Framework semantics can also be requested by a SemanticsHandle; this
+      // value is not evidence that a particular OS screen reader is running.
+      'semanticsEnabled': binding.semanticsEnabled,
+      'features': {
+        'accessibleNavigation': features.accessibleNavigation,
+        'invertColors': features.invertColors,
+        'disableAnimations': features.disableAnimations,
+        'boldText': features.boldText,
+        'reduceMotion': features.reduceMotion,
+        'highContrast': features.highContrast,
+        'onOffSwitchLabels': features.onOffSwitchLabels,
+        'supportsAnnounce': features.supportsAnnounce,
+      },
+    };
+  }
+
+  void _onSemanticsChanged() => _recordAccessibilityChange('semanticsEnabled');
+
+  @override
+  void didChangeAccessibilityFeatures() =>
+      _recordAccessibilityChange('accessibilityFeatures');
+
+  void _recordAccessibilityChange(String source) {
+    if (_finished) return;
+    final binding = WidgetsBinding.instance;
+    final semantics = binding.semanticsEnabled;
+    final features = binding.accessibilityFeatures;
+    final changed =
+        semantics != _lastSemanticsEnabled ||
+        features != _lastAccessibilityFeatures;
+    _lastSemanticsEnabled = semantics;
+    _lastAccessibilityFeatures = features;
+    if (!changed || _startUs == null) return;
+    _accessibilityChanges.add({
+      // Like lifecycle events, this is the most recent probe tick timestamp.
+      'elapsedMs': _lastElapsed.inMilliseconds,
+      'source': source,
+      'snapshot': _accessibilitySnapshot(),
+    });
+  }
+
   Future<void> _finish() async {
     if (_finished) return;
     _finished = true;
+    _measurementEndAccessibility = _accessibilitySnapshot();
+    WidgetsBinding.instance.removeSemanticsEnabledListener(_onSemanticsChanged);
     _ticker.stop();
     _watchdog?.cancel();
     _memoryTimer?.cancel();
@@ -260,7 +319,8 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
         _endUs != null &&
         _timings.isNotEmpty &&
         widget.errors.isEmpty &&
-        _metricsChanges == 0;
+        _metricsChanges == 0 &&
+        _accessibilityChanges.isEmpty;
     final result = <String, Object?>{
       'schemaVersion': 1,
       'completed': completed,
@@ -284,6 +344,12 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
         'textScale': 1.0,
         'metricsChangesDuringMeasurement': _metricsChanges,
         'lifecycleEvents': _lifecycle,
+        'accessibility': {
+          'initial': _initialAccessibility,
+          'measurementStart': _measurementStartAccessibility,
+          'measurementEnd': _measurementEndAccessibility,
+          'changesDuringMeasurement': _accessibilityChanges,
+        },
       },
       'sampling': {
         'requestedWarmupSeconds': 5,
@@ -375,6 +441,7 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    WidgetsBinding.instance.removeSemanticsEnabledListener(_onSemanticsChanged);
     SchedulerBinding.instance.removeTimingsCallback(_onTimings);
     _ticker.dispose();
     _scroll.dispose();

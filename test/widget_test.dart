@@ -260,6 +260,191 @@ void main() {
     (size: const Size(800, 600), scale: 2.0),
   ]) {
     testWidgets(
+      'library artwork and accessible actions survive wheel recycling at ${configuration.size} scale ${configuration.scale}',
+      (tester) async {
+        final captureKey = GlobalKey();
+        final artwork = (await tester.runAsync(() async {
+          final base = Directory(r'D:\dev\tmp\hanmusic-widget-artwork');
+          await base.create(recursive: true);
+          final directory = await base.createTemp('paint-');
+          final recorder = ui.PictureRecorder();
+          Canvas(recorder).drawColor(const Color(0xFFBE3456), BlendMode.src);
+          final picture = recorder.endRecording();
+          final image = await picture.toImage(8, 8);
+          try {
+            final bytes = await image.toByteData(
+              format: ui.ImageByteFormat.png,
+            );
+            final valid = File('${directory.path}/valid.png');
+            final invalid = File('${directory.path}/invalid.png');
+            await valid.writeAsBytes(bytes!.buffer.asUint8List());
+            await invalid.writeAsBytes([0, 1, 2, 3]);
+            return (directory: directory, valid: valid, invalid: invalid);
+          } finally {
+            image.dispose();
+            picture.dispose();
+          }
+        }))!;
+        final semantics = tester.ensureSemantics();
+        try {
+          await _withPlayer(
+            tester,
+            withLibrary: true,
+            size: configuration.size,
+            textScale: configuration.scale,
+            captureKey: captureKey,
+            run: (fixture) async {
+              final songs = _librarySongs(20);
+              songs[0] = songs[0].copyWith(artworkPath: artwork.valid.path);
+              songs[1] = songs[1].copyWith(artworkPath: artwork.invalid.path);
+              songs[2] = songs[2].copyWith(isMissing: true);
+              // Start real FileImage IO outside FakeAsync; waiting on a stream
+              // whose File.open began in the fake zone cannot drain that IO.
+              await tester.runAsync(() async {
+                fixture.library!.replaceAll(songs);
+                await tester.pump();
+              });
+              await tester.pumpAndSettle();
+              final list = find.byKey(const Key('library-list'));
+              final position = tester
+                  .state<ScrollableState>(
+                    find.descendant(
+                      of: list,
+                      matching: find.byType(Scrollable),
+                    ),
+                  )
+                  .position;
+              final extent = tester.widget<ListView>(list).itemExtent!;
+              Finder row(int index) =>
+                  find.byKey(ValueKey('library-song-${songs[index].id}'));
+
+              Future<void> wheelTo(int index) async {
+                final target = extent * index;
+                for (
+                  var step = 0;
+                  step < 60 && (position.pixels - target).abs() > .01;
+                  step++
+                ) {
+                  final delta = (target - position.pixels).clamp(
+                    -extent / 3,
+                    extent / 3,
+                  );
+                  await tester.runAsync(() async {
+                    await tester.sendEventToBinding(
+                      PointerScrollEvent(
+                        position: tester.getCenter(list),
+                        scrollDelta: Offset(0, delta),
+                      ),
+                    );
+                    await tester.pump();
+                  });
+                  await tester.pumpAndSettle();
+                }
+                expect(position.pixels, closeTo(target, .01));
+              }
+
+              Future<void> checkCover(int index) async {
+                await wheelTo(index);
+                final image = find.descendant(
+                  of: row(index),
+                  matching: find.byType(Image),
+                );
+                expect(await _waitForArtwork(tester, image), index == 0);
+                await tester.pumpAndSettle();
+                final bounds = tester.getRect(image);
+                final pixels = await _capturePagePixels(tester, captureKey);
+                // Sample inside the cover, away from its rounded edge and the
+                // fallback music glyph. This checks actual image/fallback paint.
+                expect(
+                  pixels.colorAt(Offset(bounds.left + 4, bounds.center.dy)),
+                  index == 0
+                      ? const Color(0xFFBE3456)
+                      : const Color(0xFFE0EAD6),
+                );
+                expect(tester.takeException(), isNull);
+              }
+
+              await checkCover(0);
+              await checkCover(1);
+              await wheelTo(5);
+              expect(row(0), findsNothing);
+              expect(row(1), findsNothing);
+              await checkCover(0);
+              await checkCover(1);
+              await wheelTo(0);
+
+              final titleNode = tester.getSemantics(find.text(songs[0].title));
+              expect(
+                titleNode.getSemanticsData().label,
+                contains(songs[0].title),
+              );
+              expect(
+                titleNode.getSemanticsData().hasAction(ui.SemanticsAction.tap),
+                isTrue,
+              );
+              final menu = find.byTooltip('${songs[0].title}的操作');
+              final menuNode = tester.getSemantics(menu);
+              expect(menuNode.flagsCollection.isButton, isTrue);
+              menuNode.owner!.performAction(
+                menuNode.id,
+                ui.SemanticsAction.tap,
+              );
+              await tester.pumpAndSettle();
+              final queueNode = tester.getSemantics(find.text('加入播放队列'));
+              queueNode.owner!.performAction(
+                queueNode.id,
+                ui.SemanticsAction.tap,
+              );
+              await tester.pumpAndSettle();
+              expect(fixture.player.queue.map((song) => song.id), [
+                songs[0].id,
+              ]);
+              expect(fixture.backend.playCalls, 0);
+
+              await wheelTo(2);
+              await tester.tap(find.text(songs[2].title));
+              await tester.pumpAndSettle();
+              expect(fixture.backend.playCalls, 0);
+              await tester.tap(find.byTooltip('${songs[2].title}的操作'));
+              await tester.pumpAndSettle();
+              final unavailable = tester.getSemantics(find.text('加入播放队列'));
+              expect(
+                unavailable.flagsCollection.isEnabled,
+                ui.Tristate.isFalse,
+              );
+              final remove = tester.getSemantics(find.text('从曲库移除（保留文件）'));
+              expect(
+                remove.getSemanticsData().hasAction(ui.SemanticsAction.tap),
+                isTrue,
+              );
+              remove.owner!.performAction(remove.id, ui.SemanticsAction.tap);
+              await tester.pumpAndSettle();
+              expect(find.text('从曲库移除？'), findsOneWidget);
+              await tester.tap(find.text('保留'));
+              await tester.pumpAndSettle();
+              expect(fixture.library!.songs, hasLength(20));
+              expect(_playButton.hitTestable(), findsOneWidget);
+              expect(tester.takeException(), isNull);
+            },
+          );
+        } finally {
+          semantics.dispose();
+          await tester.runAsync(() async {
+            for (final file in [artwork.valid, artwork.invalid]) {
+              await ResizeImage.resizeIfNeeded(
+                44,
+                null,
+                FileImage(file),
+              ).evict();
+            }
+            await artwork.directory.delete(recursive: true);
+          });
+        }
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+
+    testWidgets(
       'small wheel steps and reverse scrolling preserve row actions at ${configuration.size} scale ${configuration.scale}',
       (tester) async {
         await _withPlayer(
@@ -1236,6 +1421,31 @@ Future<_PagePixels> _capturePagePixels(
       return _PagePixels(data!, image.width, image.height, origin);
     } finally {
       image.dispose();
+    }
+  }))!;
+}
+
+Future<bool> _waitForArtwork(WidgetTester tester, Finder finder) async {
+  final image = tester.widget<Image>(finder);
+  return (await tester.runAsync(() async {
+    final result = Completer<bool>();
+    final stream = image.image.resolve(
+      createLocalImageConfiguration(tester.element(finder)),
+    );
+    final listener = ImageStreamListener(
+      (info, _) {
+        info.dispose();
+        if (!result.isCompleted) result.complete(true);
+      },
+      onError: (_, _) {
+        if (!result.isCompleted) result.complete(false);
+      },
+    );
+    stream.addListener(listener);
+    try {
+      return await result.future.timeout(const Duration(seconds: 5));
+    } finally {
+      stream.removeListener(listener);
     }
   }))!;
 }
