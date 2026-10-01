@@ -225,6 +225,51 @@ void main() {
     expect(controller.timerRemaining.value, isNull);
     expect(backend.pauseCalls, 1);
   });
+  test(
+    'cancelled blocked scan releases controller busy for another import',
+    () async {
+      controller.onDelete();
+      final repository = _BlockedScanRepository();
+      final library = LibraryService(repository: repository);
+      final libraryPicker = _FakeLibraryPicker()..directory = r'D:\music';
+      controller = PlayerController(
+        player: player,
+        timer: timer,
+        picker: picker,
+        library: library,
+        libraryPicker: libraryPicker,
+      )..onStart();
+      final importing = controller.importDirectory();
+      try {
+        await repository.started.future;
+        expect(controller.libraryBusy, isTrue);
+        await controller.importDirectory();
+        expect(repository.calls, 1);
+        controller.cancelImport();
+        controller.cancelImport();
+        await importing.timeout(const Duration(seconds: 1));
+        expect(controller.isImporting.value, isFalse);
+        expect(controller.isScanning.value, isFalse);
+        expect(controller.libraryBusy, isFalse);
+        expect(controller.libraryStatus.value, contains('已取消导入'));
+
+        await controller.importDirectory();
+        expect(repository.calls, 2);
+        final status = controller.libraryStatus.value;
+        repository.blocked.complete();
+        await repository.finished.future;
+        await _flushCallbacks();
+        expect(controller.libraryBusy, isFalse);
+        expect(controller.libraryStatus.value, status);
+      } finally {
+        if (!repository.blocked.isCompleted) repository.blocked.complete();
+        await importing;
+        await repository.finished.future;
+        library.onClose();
+      }
+    },
+  );
+
   group('library controller orchestration', () {
     late _FakeLibrary library;
     late _FakeLibraryPicker libraryPicker;
@@ -383,6 +428,34 @@ class _FakeLibrary extends LibraryService {
     refreshCalls++;
     if (markMissingOnRefresh) {
       replaceAll(songs.map((song) => song.copyWith(isMissing: true)).toList());
+    }
+  }
+}
+
+class _BlockedScanRepository extends LocalLibraryRepository {
+  _BlockedScanRepository()
+    : super(
+        artworkDirectory: Directory('D:/dev/tmp/unused-blocked-scan-artwork'),
+      );
+
+  final started = Completer<void>();
+  final blocked = Completer<void>();
+  final finished = Completer<void>();
+  int calls = 0;
+
+  @override
+  Stream<LibraryScanEntry> scan(
+    List<String> paths,
+    ImportCancellation cancellation,
+  ) async* {
+    calls++;
+    if (calls != 1) return;
+    try {
+      started.complete();
+      await blocked.future;
+      yield const LibraryScanEntry.warning('late scan warning');
+    } finally {
+      finished.complete();
     }
   }
 }

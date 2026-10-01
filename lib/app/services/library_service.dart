@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:get/get.dart';
@@ -23,6 +24,8 @@ class LibraryService extends GetxService {
     if (_closed || isImporting.value || paths.isEmpty) return [];
     final cancellation = _cancellation = ImportCancellation();
     final session = _repository.openReadSession(cancellation);
+    final waiting = _ImportWaiter(cancellation);
+    StreamIterator<LibraryScanEntry>? scan;
     final imported = <Song>[];
     final known = songs.map((song) => song.id).toSet();
     var duplicates = 0;
@@ -33,8 +36,10 @@ class LibraryService extends GetxService {
     warningCount.value = 0;
     statusMessage.value = '正在扫描音频文件…';
     try {
-      await for (final entry in _repository.scan(paths, cancellation)) {
+      scan = StreamIterator(_repository.scan(paths, cancellation));
+      while (await waiting.wait(scan.moveNext())) {
         cancellation.check();
+        final entry = scan.current;
         if (entry.warning != null) {
           errorCount.value++;
           statusMessage.value = entry.warning;
@@ -50,7 +55,9 @@ class LibraryService extends GetxService {
         final result = await session.read(file);
         cancellation.check();
         if (result.warning != null) warningCount.value++;
-        if (!await file.exists()) {
+        final exists = await waiting.wait(file.exists());
+        cancellation.check();
+        if (!exists) {
           errorCount.value++;
           processed.value++;
           continue;
@@ -68,8 +75,25 @@ class LibraryService extends GetxService {
     } catch (_) {
       if (!cancellation.isCancelled) errorCount.value++;
     } finally {
-      await session.close();
-      if (!_closed) {
+      final activeScan = scan;
+      if (activeScan != null) {
+        try {
+          // async* cancellation can itself wait for old filesystem I/O. Stop
+          // listening now, but do not hold the UI behind that cleanup Future.
+          await waiting.wait(Future<void>.sync(activeScan.cancel));
+        } on ImportCancelled {
+          // The waiter still consumes a late cancellation failure.
+        } catch (_) {
+          if (!cancellation.isCancelled) errorCount.value++;
+        }
+      }
+      try {
+        await session.close();
+      } catch (_) {
+        if (!cancellation.isCancelled) errorCount.value++;
+      }
+      await waiting.close();
+      if (!_closed && identical(_cancellation, cancellation)) {
         final outcome = cancellation.isCancelled ? '已取消导入' : '导入完成';
         statusMessage.value =
             '$outcome：新增 ${imported.length} 首，重复 $duplicates 首'
@@ -146,4 +170,44 @@ class LibraryService extends GetxService {
     cancelImport();
     super.onClose();
   }
+}
+
+/// Owns one active wait and one removable cancellation listener per import.
+/// Releasing the wait does not claim to abort the underlying filesystem I/O.
+class _ImportWaiter {
+  _ImportWaiter(this.cancellation) {
+    _subscription = cancellation.whenCancelled.asStream().listen((_) {
+      final pending = _pending;
+      if (pending != null && !pending.isCompleted) {
+        pending.completeError(const ImportCancelled());
+      }
+    });
+  }
+
+  final ImportCancellation cancellation;
+  late final StreamSubscription<void> _subscription;
+  Completer<dynamic>? _pending;
+
+  Future<T> wait<T>(Future<T> operation) {
+    final completion = Completer<T>();
+    _pending = completion;
+    // Attach both handlers before checking cancellation. Even an already
+    // cancelled import must consume a late error from the original operation.
+    operation.then<void>(
+      (value) {
+        if (!completion.isCompleted) completion.complete(value);
+      },
+      onError: (Object error, StackTrace stack) {
+        if (!completion.isCompleted) completion.completeError(error, stack);
+      },
+    );
+    if (cancellation.isCancelled) {
+      completion.completeError(const ImportCancelled());
+    }
+    return completion.future.whenComplete(() {
+      if (identical(_pending, completion)) _pending = null;
+    });
+  }
+
+  Future<void> close() => _subscription.cancel();
 }

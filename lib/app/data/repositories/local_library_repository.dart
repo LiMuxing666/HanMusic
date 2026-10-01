@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:audio_metadata_reader/audio_metadata_reader.dart';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path/path.dart' as p;
 
 import '../models/song.dart';
@@ -48,6 +49,7 @@ class LocalLibraryRepository {
     required this.artworkDirectory,
     MetadataReader? metadataReader,
     this.metadataTimeout = const Duration(seconds: 5),
+    this.debugOnArtworkStaged,
   }) : _metadataReader = metadataReader;
 
   static const supportedExtensions = {
@@ -65,6 +67,11 @@ class LocalLibraryRepository {
   final Directory artworkDirectory;
   final MetadataReader? _metadataReader;
   final Duration metadataTimeout;
+
+  /// Optional isolate-sendable test gate, after a real cache write and before
+  /// its rename. Production never installs a gate.
+  @visibleForTesting
+  final Future<void> Function(String temporaryPath)? debugOnArtworkStaged;
 
   LibraryReadSession openReadSession(ImportCancellation cancellation) =>
       LibraryReadSession._(this, cancellation);
@@ -123,19 +130,25 @@ class LocalLibraryRepository {
 }
 
 class LibraryReadSession {
-  LibraryReadSession._(this._repository, this._cancellation);
+  LibraryReadSession._(this._repository, this._cancellation) {
+    // One subscription per import, rather than retaining a cancellation
+    // listener for every song until a large import is closed.
+    _cancellation.whenCancelled.then((_) => _cancelCurrent?.call());
+  }
   final LocalLibraryRepository _repository;
   final ImportCancellation _cancellation;
-  Isolate? _isolate;
-  ReceivePort? _port;
-  StreamSubscription<dynamic>? _subscription;
-  SendPort? _requests;
-  Completer<Map<String, dynamic>>? _pending;
+  void Function()? _cancelCurrent;
+  _MetadataWorker? _worker;
+  Future<void>? _closeFuture;
   bool _closed = false;
+  bool _reading = false;
 
   Future<LibraryReadResult> read(File file) async {
     _cancellation.check();
     if (_closed) throw StateError('Metadata session is closed.');
+    if (_reading) throw StateError('Metadata reads must be sequential.');
+    _reading = true;
+    _MetadataWorker? worker;
     final fallback = Song(
       uri: file.absolute.uri,
       fileName: p.basename(file.path),
@@ -145,30 +158,21 @@ class LibraryReadSession {
       if (_repository._metadataReader case final reader?) {
         // Injection is for deterministic tests. The production parser and
         // artwork writes below always run in the persistent worker isolate.
-        final metadata = await Future.any<AudioMetadata>([
+        final metadata = await _whileOpen(
           Future.sync(() => reader(file)),
-          _cancellation.whenCancelled.then(
-            (_) => throw const ImportCancelled(),
-          ),
-        ]).timeout(_repository.metadataTimeout);
-        _cancellation.check();
+        ).timeout(_repository.metadataTimeout);
+        _checkOpen();
         result = await _cacheInjectedMetadata(
           metadata,
           _repository.artworkDirectory.path,
         );
       } else {
-        await _startWorker();
-        _cancellation.check();
-        final pending = _pending = Completer<Map<String, dynamic>>();
-        _requests!.send([file.path, _repository.artworkDirectory.path]);
-        result = await Future.any<Map<String, dynamic>>([
-          pending.future,
-          _cancellation.whenCancelled.then(
-            (_) => throw const ImportCancelled(),
-          ),
-        ]).timeout(_repository.metadataTimeout);
+        worker = _worker ??= _MetadataWorker(_repository);
+        result = await _whileOpen(
+          worker.read(file),
+        ).timeout(_repository.metadataTimeout);
       }
-      _cancellation.check();
+      _checkOpen();
       return LibraryReadResult(
         song: Song(
           uri: fallback.uri,
@@ -184,88 +188,257 @@ class LibraryReadSession {
         warning: result['warning'] as String?,
       );
     } on ImportCancelled {
-      await _resetWorker();
+      await _resetWorker(worker);
       rethrow;
     } catch (_) {
-      await _resetWorker();
+      await _resetWorker(worker);
+      _checkOpen();
       return LibraryReadResult(
         song: fallback,
         warning: '元数据读取失败，使用文件名：${fallback.fileName}',
       );
     } finally {
-      _pending = null;
+      _reading = false;
     }
   }
 
-  Future<void> _startWorker() async {
-    if (_isolate != null) return;
-    final ready = Completer<SendPort>();
-    final port = _port = ReceivePort();
-    _subscription = port.listen((dynamic message) {
+  void _checkOpen() {
+    _cancellation.check();
+    if (_closed) throw const ImportCancelled();
+  }
+
+  Future<T> _whileOpen<T>(Future<T> operation) async {
+    final pending = Completer<T>();
+    void cancel() {
+      if (!pending.isCompleted) pending.completeError(const ImportCancelled());
+    }
+
+    _cancelCurrent = cancel;
+    // Keep an error handler on the operation even when cancellation wins.
+    operation.then<void>(
+      (value) {
+        if (!pending.isCompleted) pending.complete(value);
+      },
+      onError: (Object error, StackTrace stack) {
+        if (!pending.isCompleted) pending.completeError(error, stack);
+      },
+    );
+    if (_closed || _cancellation.isCancelled) cancel();
+    try {
+      return await pending.future;
+    } finally {
+      if (identical(_cancelCurrent, cancel)) _cancelCurrent = null;
+    }
+  }
+
+  Future<void> _resetWorker(_MetadataWorker? worker) async {
+    if (identical(_worker, worker)) _worker = null;
+    await worker?.stop();
+  }
+
+  Future<void> close() {
+    if (_closeFuture case final closing?) return closing;
+    _closed = true;
+    _cancelCurrent?.call();
+    return _closeFuture = _resetWorker(_worker);
+  }
+}
+
+/// Each incarnation owns its ports, pending reply, and staging directory. A late
+/// reply/exit can never complete a replacement worker's request.
+class _MetadataWorker {
+  _MetadataWorker(this.repository) {
+    _responses.listen((dynamic message) {
       if (message is SendPort) {
-        ready.complete(message);
+        if (!_ready.isCompleted) _ready.complete(message);
       } else if (message is Map) {
         final pending = _pending;
         if (pending != null && !pending.isCompleted) {
           pending.complete(Map<String, dynamic>.from(message));
         }
       } else {
-        final error = StateError('Metadata worker stopped unexpectedly.');
-        if (!ready.isCompleted) ready.completeError(error);
-        final pending = _pending;
-        if (pending != null && !pending.isCompleted) {
-          pending.completeError(error);
-        }
+        _fail(StateError('Metadata worker stopped unexpectedly.'));
       }
     });
-    _isolate = await Isolate.spawn(
-      _metadataWorker,
-      port.sendPort,
-      onError: port.sendPort,
-      onExit: port.sendPort,
-    );
-    _requests = await ready.future.timeout(_repository.metadataTimeout);
+    _exits.listen((_) => _finishExit());
+    unawaited(_start());
   }
 
-  Future<void> _resetWorker() async {
+  final LocalLibraryRepository repository;
+  final _responses = ReceivePort();
+  final _exits = ReceivePort();
+  final _ready = Completer<SendPort>();
+  final _stopped = Completer<void>();
+  Completer<Map<String, dynamic>>? _pending;
+  Isolate? _isolate;
+  Directory? _stagingDirectory;
+  Future<void>? _stopFuture;
+  bool _stopping = false;
+  bool _exited = false;
+
+  Future<void> _start() async {
+    try {
+      try {
+        await repository.artworkDirectory.create(recursive: true);
+        _stagingDirectory = await repository.artworkDirectory.createTemp(
+          '.import-',
+        );
+      } on FileSystemException {
+        // Tags remain usable when artwork cannot be cached. The worker will
+        // report the cache warning without writing an unowned temporary file.
+      }
+      if (_stopping) {
+        await _finishExit();
+        return;
+      }
+      _isolate = await Isolate.spawn(
+        _metadataWorker,
+        [
+          _responses.sendPort,
+          repository.debugOnArtworkStaged,
+          _stagingDirectory?.path,
+        ],
+        onError: _responses.sendPort,
+        onExit: _exits.sendPort,
+      );
+      // close() may win while Isolate.spawn is awaiting its handle.
+      if (_stopping) _isolate!.kill(priority: Isolate.immediate);
+    } catch (_) {
+      _fail(StateError('Metadata worker could not start.'));
+      await _finishExit();
+    }
+  }
+
+  Future<Map<String, dynamic>> read(File file) async {
+    final requests = await _ready.future;
+    if (_stopping) throw const ImportCancelled();
+    final pending = _pending = Completer<Map<String, dynamic>>();
+    requests.send([file.path, repository.artworkDirectory.path]);
+    try {
+      return await pending.future;
+    } finally {
+      if (identical(_pending, pending)) _pending = null;
+    }
+  }
+
+  void _fail(Object error) {
+    if (!_ready.isCompleted) _ready.completeError(error);
+    final pending = _pending;
+    if (pending != null && !pending.isCompleted) pending.completeError(error);
+  }
+
+  Future<void> _finishExit() async {
+    if (_exited) return;
+    _exited = true;
+    _stopping = true;
+    _fail(const ImportCancelled());
+    _responses.close();
+    _exits.close();
+    // Isolate.kill does not run a worker's finally. Only the parent may clean
+    // staged bytes after confirmed exit (or before an isolate was spawned).
+    try {
+      await _deleteStagingDirectory(_stagingDirectory);
+    } catch (_) {
+      // An unexpected cleanup failure must not escape the exit callback or
+      // prevent shutdown completion. Leave uncertain files in place.
+    } finally {
+      _stopped.complete();
+    }
+  }
+
+  Future<void> stop() {
+    if (_stopFuture case final stopping?) return stopping;
+    _stopping = true;
+    _fail(const ImportCancelled());
     _isolate?.kill(priority: Isolate.immediate);
-    _isolate = null;
-    _requests = null;
-    await _subscription?.cancel();
-    _subscription = null;
-    _port?.close();
-    _port = null;
+    // Slow filesystem calls may delay isolate exit. Keep the exit listener and
+    // defer cleanup in that case; never delete a directory a worker can write.
+    return _stopFuture = _stopped.future.timeout(
+      const Duration(milliseconds: 500),
+      onTimeout: () {},
+    );
   }
+}
 
-  Future<void> close() async {
-    _closed = true;
-    await _resetWorker();
+Future<void> _deleteStagingDirectory(Directory? directory) async {
+  if (directory == null) return;
+  try {
+    if (await FileSystemEntity.type(directory.path, followLinks: false) !=
+        FileSystemEntityType.directory) {
+      return;
+    }
+    // No recursive deletion or traversal of links, and no sweep of the shared
+    // cache. Unknown files cause the final non-recursive directory delete to
+    // fail safely instead of deleting another writer's content.
+    final ownedName = RegExp(r'^[0-9a-f]{64}\.(png|jpg)\.tmp$');
+    await for (final entity in directory.list(followLinks: false)) {
+      if (entity is File && ownedName.hasMatch(p.basename(entity.path))) {
+        await entity.delete();
+      }
+    }
+    await directory.delete();
+  } on FileSystemException {
+    // Locked/unavailable files are retained. This is not a crash-recovery sweep.
   }
 }
 
 Future<Map<String, dynamic>> _cacheInjectedMetadata(
   AudioMetadata metadata,
   String directory,
-) => Isolate.run(() => _metadataResult(metadata, directory));
+) => Isolate.run(() async {
+  Directory? staging;
+  try {
+    if (metadata.pictures.any(
+      (picture) => _safeImageExtension(picture.bytes) != null,
+    )) {
+      try {
+        final cache = await Directory(directory).create(recursive: true);
+        staging = await cache.createTemp('.import-');
+      } on FileSystemException {
+        // Match the production fallback when only the cache is unavailable.
+      }
+    }
+    return await _metadataResult(
+      metadata,
+      directory,
+      stagingDirectory: staging?.path,
+    );
+  } finally {
+    await _deleteStagingDirectory(staging);
+  }
+});
 
-void _metadataWorker(SendPort responses) {
+void _metadataWorker(List<Object?> arguments) {
+  final responses = arguments[0] as SendPort;
+  final onArtworkStaged =
+      arguments[1] as Future<void> Function(String temporaryPath)?;
+  final stagingDirectory = arguments[2] as String?;
   final requests = ReceivePort();
   responses.send(requests.sendPort);
-  requests.listen((dynamic message) {
+  requests.listen((dynamic message) async {
     final request = message as List;
     try {
       final metadata = readMetadata(File(request[0] as String), getImage: true);
-      responses.send(_metadataResult(metadata, request[1] as String));
+      responses.send(
+        await _metadataResult(
+          metadata,
+          request[1] as String,
+          onArtworkStaged: onArtworkStaged,
+          stagingDirectory: stagingDirectory,
+        ),
+      );
     } catch (_) {
       responses.send(<String, dynamic>{'warning': '元数据读取失败，已使用文件名。'});
     }
   });
 }
 
-Map<String, dynamic> _metadataResult(
+Future<Map<String, dynamic>> _metadataResult(
   AudioMetadata metadata,
-  String artworkDirectory,
-) {
+  String artworkDirectory, {
+  required String? stagingDirectory,
+  Future<void> Function(String temporaryPath)? onArtworkStaged,
+}) async {
   String? clean(String? value) {
     final text = value?.trim();
     if (text == null || text.isEmpty) return null;
@@ -292,11 +465,17 @@ Map<String, dynamic> _metadataResult(
       final digest = sha256.convert(picture.bytes).toString();
       final target = File(p.join(directory.path, '$digest.$extension'));
       if (!target.existsSync()) {
+        if (stagingDirectory == null) {
+          throw const FileSystemException('Artwork staging is unavailable.');
+        }
         final temporary = File(
-          '${target.path}.${DateTime.now().microsecondsSinceEpoch}.tmp',
+          p.join(stagingDirectory, '$digest.$extension.tmp'),
         );
         try {
           temporary.writeAsBytesSync(picture.bytes, flush: true);
+          if (onArtworkStaged != null) {
+            await onArtworkStaged(temporary.path);
+          }
           temporary.renameSync(target.path);
         } finally {
           if (temporary.existsSync()) temporary.deleteSync();
