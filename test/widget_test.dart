@@ -445,6 +445,199 @@ void main() {
     );
 
     testWidgets(
+      'library missing recovery preserves artwork focus and semantics at ${configuration.size} scale ${configuration.scale}',
+      (tester) async {
+        final captureKey = GlobalKey();
+        const coverColor = Color(0xFFBE3456);
+        final artwork = (await tester.runAsync(() async {
+          final base = Directory(r'D:\dev\tmp\hanmusic-widget-artwork');
+          await base.create(recursive: true);
+          final directory = await base.createTemp('missing-transition-');
+          final recorder = ui.PictureRecorder();
+          Canvas(recorder).drawColor(coverColor, BlendMode.src);
+          final picture = recorder.endRecording();
+          final image = await picture.toImage(8, 8);
+          try {
+            final bytes = await image.toByteData(
+              format: ui.ImageByteFormat.png,
+            );
+            final file = File('${directory.path}/cover.png');
+            await file.writeAsBytes(bytes!.buffer.asUint8List());
+            return (directory: directory, file: file);
+          } finally {
+            image.dispose();
+            picture.dispose();
+          }
+        }))!;
+        final semantics = tester.ensureSemantics();
+        try {
+          await _withPlayer(
+            tester,
+            withLibrary: true,
+            size: configuration.size,
+            textScale: configuration.scale,
+            captureKey: captureKey,
+            run: (fixture) async {
+              final songs = _librarySongs(10);
+              songs[0] = songs[0].copyWith(artworkPath: artwork.file.path);
+              final target = songs.first;
+              final row = find.byKey(ValueKey('library-song-${target.id}'));
+              final neighbor = find.byKey(
+                ValueKey('library-song-${songs[1].id}'),
+              );
+              final title = find.descendant(
+                of: row,
+                matching: find.text(target.title),
+              );
+              final cover = find.descendant(
+                of: row,
+                matching: find.byType(Image),
+              );
+              final menu = find.byTooltip('${target.title}的操作');
+              Future<void> setMissing(bool missing) async {
+                // Exercise the real service update; no filesystem/picker claim.
+                await tester.runAsync(() async {
+                  fixture.library!.replaceAll([
+                    target.copyWith(isMissing: missing),
+                    ...songs.skip(1),
+                  ]);
+                  await tester.pump();
+                });
+                expect(await _waitForArtwork(tester, cover), isTrue);
+                await tester.pumpAndSettle();
+              }
+
+              await setMissing(false);
+              for (var step = 0; step < 100; step++) {
+                await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+                await tester.pumpAndSettle();
+                if (_primaryFocusWithin(menu)) break;
+              }
+              expect(_primaryFocusWithin(menu), isTrue);
+              // The menu remains enabled when playback becomes unavailable.
+              final focus = FocusManager.instance.primaryFocus;
+              final rowBounds = tester.getRect(row);
+              final neighborBounds = tester.getRect(neighbor);
+              final coverPoint = tester.getCenter(cover);
+              final titleBounds = tester.getRect(title);
+              final normal = await _capturePagePixels(tester, captureKey);
+              expect(normal.colorAt(coverPoint), coverColor);
+              expect(
+                tester
+                    .getSemantics(title)
+                    .getSemanticsData()
+                    .hasAction(ui.SemanticsAction.tap),
+                isTrue,
+              );
+
+              await setMissing(true);
+              expect(FocusManager.instance.primaryFocus, same(focus));
+              expect(_primaryFocusWithin(menu), isTrue);
+              expect(tester.getRect(row), rowBounds);
+              expect(tester.getRect(neighbor), neighborBounds);
+              expect(find.text('文件缺失 · 可检查或移除索引'), findsOneWidget);
+              final missing = await _capturePagePixels(tester, captureKey);
+              expect(missing.colorAt(coverPoint), isNot(coverColor));
+              expect(
+                normal.changedPixels(missing, titleBounds),
+                greaterThan(0),
+              );
+              expect(
+                tester
+                    .getSemantics(title)
+                    .getSemanticsData()
+                    .hasAction(ui.SemanticsAction.tap),
+                isFalse,
+              );
+              await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+              await tester.pumpAndSettle();
+              expect(
+                tester
+                    .getSemantics(find.text('加入播放队列'))
+                    .flagsCollection
+                    .isEnabled,
+                ui.Tristate.isFalse,
+              );
+              expect(
+                tester
+                    .getSemantics(find.text('从曲库移除（保留文件）'))
+                    .getSemanticsData()
+                    .hasAction(ui.SemanticsAction.tap),
+                isTrue,
+              );
+              await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+              await tester.pumpAndSettle();
+              expect(FocusManager.instance.primaryFocus, same(focus));
+              expect(fixture.backend.playCalls, 0);
+
+              await setMissing(false);
+              expect(FocusManager.instance.primaryFocus, same(focus));
+              expect(_primaryFocusWithin(menu), isTrue);
+              expect(tester.getRect(row), rowBounds);
+              expect(tester.getRect(neighbor), neighborBounds);
+              final restored = await _capturePagePixels(tester, captureKey);
+              expect(restored.colorAt(coverPoint), coverColor);
+              expect(normal.changedPixels(restored, titleBounds), 0);
+              final restoredTitle = tester.getSemantics(title);
+              expect(
+                restoredTitle.getSemanticsData().label,
+                contains(target.title),
+              );
+              expect(
+                restoredTitle.getSemanticsData().hasAction(
+                  ui.SemanticsAction.tap,
+                ),
+                isTrue,
+              );
+
+              await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+              await tester.pumpAndSettle();
+              final queueAction = tester.getSemantics(find.text('加入播放队列'));
+              expect(queueAction.flagsCollection.isEnabled, ui.Tristate.isTrue);
+              queueAction.owner!.performAction(
+                queueAction.id,
+                ui.SemanticsAction.tap,
+              );
+              await tester.pumpAndSettle();
+              expect(fixture.player.queue.map((song) => song.id), [target.id]);
+              expect(fixture.backend.playCalls, 0);
+              final playAction = tester.getSemantics(title);
+              playAction.owner!.performAction(
+                playAction.id,
+                ui.SemanticsAction.tap,
+              );
+              await tester.pumpAndSettle();
+              expect(fixture.backend.loadedUris, [target.uri]);
+              expect(fixture.player.currentSong.value?.id, target.id);
+              expect(tester.takeException(), isNull);
+            },
+          );
+        } finally {
+          semantics.dispose();
+          await tester.runAsync(() async {
+            await ResizeImage.resizeIfNeeded(
+              44,
+              null,
+              FileImage(artwork.file),
+            ).evict();
+            final resolvedBase = await Directory(
+              r'D:\dev\tmp\hanmusic-widget-artwork',
+            ).resolveSymbolicLinks();
+            final resolvedDirectory = Directory(
+              await artwork.directory.resolveSymbolicLinks(),
+            );
+            if (resolvedDirectory.parent.path.toLowerCase() !=
+                resolvedBase.toLowerCase()) {
+              throw StateError('Artwork cleanup escaped its temporary base.');
+            }
+            await resolvedDirectory.delete(recursive: true);
+          });
+        }
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+
+    testWidgets(
       'small wheel steps and reverse scrolling preserve row actions at ${configuration.size} scale ${configuration.scale}',
       (tester) async {
         await _withPlayer(
