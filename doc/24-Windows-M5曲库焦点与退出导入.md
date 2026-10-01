@@ -53,7 +53,11 @@ Controller 新增退出门禁和导入 generation，从等待 picker 到导入�
 
 ## 5. 交付与边界
 
-产品版本为 `0.1.0-dev.13+13`。本轮先提交修复、回归和运行说明，再从干净提交构建正常入口 `lib/main.dart` 的开发预览；完整包构建与验收结果随后补记。四份修改文档共 51 个本地链接检查通过，`git diff --check` 通过。
+从干净提交 `59212202abfdb183fac3f1c77fb11c38ae13a7ec` 重建正常入口 `lib/main.dart` 的 Windows Release，耗时 121.3 秒。产品版本为 `0.1.0-dev.13+13`，完整 ZIP 为 `D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-dev.13-M5.zip`，大小 **20,496,795 字节**，SHA-256 为 `4569c44847be147d4062bd7b46eb1411f82508cae90714e3cb1bd1be7ce97dae`。34 个内容文件加清单共 35 个文件，`gitDirty=false`、`entryPoint=lib/main.dart`、`publicReleaseReady=false`；正常应用 `app.so` SHA-256 为 `bd6670ecb5a4ea87bfce6c2bdd9f27c52833ccfe804db792fbb83fbab21c5383`。构建日志为 `package-dev13.txt`。
+
+使用系统 PowerShell **5.1.26100.9444** 在 D 盘独立中文、空格目录解压，完整包 **6 项检查通过**：ZIP 校验、所有清单文件哈希与无预置 UserData、x64 运行库检查、用户启动器八秒响应、运行中独占数据目录，以及停止后的锁释放。启动器返回 0，数据创建在解压目录的 D 盘 UserData；锁冲突 Win32 错误为 33，精确核对本轮 PID/EXE/启动时间后停止测试进程，首次重试 23 ms 取得锁。应用及辅助进程均已清理，报告为 `package-verification-dev13.json`。
+
+这六项是开发机上的完整性、启动和进程锁检查；强制结束不等于正常关窗或持久化验收，没有在该包上操作页面播放、原生选择器或干净机器。四份修改文档共 51 个本地链接检查通过，`git diff --check` 通过。
 
 真实物理出声和完整页面起播、原生系统对话框/窗口/休眠/设备切换、真实系统 DPI、干净 Windows 机器和发行授权/原生对应源码门槛继续按 [开发计划](./05-Windows版本开发计划.md) 保留。M5 完成前不标记正式 v0.1，也不开始依赖它的 M6。
 
