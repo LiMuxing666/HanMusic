@@ -1086,6 +1086,355 @@ void main() {
     }
   }
 
+  for (final configuration in [
+    (size: const Size(1280, 720), scale: 1.0, direction: 1.0),
+    (size: const Size(800, 600), scale: 2.0, direction: -1.0),
+  ]) {
+    testWidgets(
+      'queue drag rejects stale drop after keyboard reorder at ${configuration.size} scale ${configuration.scale}',
+      (tester) async {
+        await _withPlayer(
+          tester,
+          withLibrary: true,
+          size: configuration.size,
+          textScale: configuration.scale,
+          run: (fixture) async {
+            final songs = _librarySongs(3);
+            fixture.player.addToQueue(songs);
+            await tester.tap(find.byKey(const Key('nav-2')));
+            await tester.pumpAndSettle();
+            final down = find.descendant(
+              of: _queueRow(songs[0]),
+              matching: find.byTooltip('下移'),
+            );
+            await _tabToQueueControl(tester, down);
+            final focus = FocusManager.instance.primaryFocus;
+            final drag = await _dragQueueRow(
+              tester,
+              songs[1],
+              direction: configuration.direction,
+            );
+            try {
+              expect(FocusManager.instance.primaryFocus, same(focus));
+              await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+              await tester.pumpAndSettle();
+              expect(fixture.player.queue.map((song) => song.id), [
+                songs[1].id,
+                songs[0].id,
+                songs[2].id,
+              ]);
+              expect(FocusManager.instance.primaryFocus, same(focus));
+              await drag.up();
+              await tester.pumpAndSettle();
+              expect(
+                fixture.player.queue.map((song) => song.id),
+                [songs[1].id, songs[0].id, songs[2].id],
+                reason: 'The old B drag must not move the new item at index 1.',
+              );
+              expect(tester.takeException(), isNull);
+            } finally {
+              await drag.removePointer();
+            }
+          },
+        );
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+  }
+
+  for (final mutation in [
+    'delete dragged song',
+    'replace same length',
+    'leave page',
+  ]) {
+    testWidgets(
+      'queue drag cancels safely on $mutation',
+      (tester) async {
+        await _withPlayer(
+          tester,
+          withLibrary: true,
+          run: (fixture) async {
+            final songs = _librarySongs(4);
+            fixture.player.addToQueue(songs.take(3).toList());
+            await tester.tap(find.byKey(const Key('nav-2')));
+            await tester.pumpAndSettle();
+            final drag = await _dragQueueRow(tester, songs[1]);
+            try {
+              switch (mutation) {
+                case 'delete dragged song':
+                  await fixture.controller.removeFromQueue(songs[1].id);
+                case 'replace same length':
+                  await fixture.player.restoreQueue([
+                    songs[0],
+                    songs[3],
+                    songs[2],
+                  ]);
+                case 'leave page':
+                  await tester.tap(find.byKey(const Key('nav-0')));
+              }
+              final expected = fixture.player.queue
+                  .map((song) => song.id)
+                  .toList();
+              await tester.pumpAndSettle();
+              await drag.moveBy(const Offset(0, 5));
+              await drag.up();
+              await tester.pumpAndSettle();
+              expect(fixture.player.queue.map((song) => song.id), expected);
+              if (mutation == 'leave page') {
+                await tester.tap(find.byKey(const Key('nav-2')));
+                await tester.pumpAndSettle();
+              }
+              // No invisible dragged row or orphaned proxy survives cancellation.
+              for (final song in fixture.player.queue) {
+                expect(_queueRow(song), findsOneWidget);
+                expect(
+                  find.descendant(
+                    of: _queueRow(song),
+                    matching: find.text(song.title),
+                  ),
+                  findsOneWidget,
+                );
+              }
+              expect(tester.takeException(), isNull);
+            } finally {
+              await drag.removePointer();
+            }
+          },
+        );
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+  }
+
+  for (final down in [true, false]) {
+    testWidgets(
+      'queue repeated keyboard moves target the same song without a frame: down $down',
+      (tester) async {
+        await _withPlayer(
+          tester,
+          withLibrary: true,
+          run: (fixture) async {
+            final songs = _librarySongs(3);
+            fixture.player.addToQueue(songs);
+            await tester.tap(find.byKey(const Key('nav-2')));
+            await tester.pumpAndSettle();
+            final target = down ? songs.first : songs.last;
+            final button = find.descendant(
+              of: _queueRow(target),
+              matching: find.byTooltip(down ? '下移' : '上移'),
+            );
+            await _tabToQueueControl(tester, button);
+            await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+            await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+            await tester.pumpAndSettle();
+            expect(
+              fixture.player.queue.map((song) => song.id),
+              down
+                  ? [songs[1].id, songs[2].id, songs[0].id]
+                  : [songs[2].id, songs[0].id, songs[1].id],
+            );
+            expect(tester.takeException(), isNull);
+          },
+        );
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+  }
+
+  for (final updateMetadata in [false, true]) {
+    testWidgets(
+      'queue drag completes normally with metadata update $updateMetadata',
+      (tester) async {
+        await _withPlayer(
+          tester,
+          withLibrary: true,
+          run: (fixture) async {
+            final songs = _librarySongs(3);
+            await fixture.player.playQueue(songs, startIndex: 1);
+            fixture.backend.emitPosition(const Duration(seconds: 37));
+            await tester.tap(find.byKey(const Key('nav-2')));
+            await tester.pumpAndSettle();
+            final backendCalls = List<String>.of(fixture.backend.calls);
+            final drag = await _dragQueueRow(tester, songs[1]);
+            try {
+              if (updateMetadata) {
+                fixture.player.updateSongs([
+                  songs[1].copyWith(trackTitle: '更新后的歌曲标题'),
+                ]);
+                await tester.pumpAndSettle();
+              }
+              await drag.up();
+              await tester.pumpAndSettle();
+              expect(fixture.player.queue.map((song) => song.id), [
+                songs[0].id,
+                songs[2].id,
+                songs[1].id,
+              ]);
+              expect(
+                fixture.player.queue.last.title,
+                updateMetadata ? '更新后的歌曲标题' : songs[1].title,
+              );
+              expect(fixture.player.currentSong.value?.id, songs[1].id);
+              expect(
+                fixture.player.position.value,
+                const Duration(seconds: 37),
+              );
+              expect(fixture.player.isPlaying.value, isTrue);
+              expect(fixture.backend.calls, backendCalls);
+              expect(tester.takeException(), isNull);
+            } finally {
+              await drag.removePointer();
+            }
+          },
+        );
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+  }
+
+  for (final title in [false, true]) {
+    testWidgets(
+      'queue playback keeps song identity before a rebuild: title $title',
+      (tester) async {
+        await _withPlayer(
+          tester,
+          withLibrary: true,
+          run: (fixture) async {
+            final songs = _librarySongs(3);
+            fixture.player.addToQueue(songs);
+            await tester.tap(find.byKey(const Key('nav-2')));
+            await tester.pumpAndSettle();
+            final target = title
+                ? find.ancestor(
+                    of: find.descendant(
+                      of: _queueRow(songs[0]),
+                      matching: find.text(songs[0].title),
+                    ),
+                    matching: find.byType(InkWell),
+                  )
+                : find.byTooltip('播放${songs[0].title}');
+            await _tabToQueueControl(tester, target);
+            fixture.controller.reorderQueue(0, 3);
+            await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+            await tester.pumpAndSettle();
+            expect(fixture.player.currentSong.value?.id, songs[0].id);
+            expect(fixture.backend.loadedUris, [songs[0].uri]);
+            expect(tester.takeException(), isNull);
+          },
+        );
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+  }
+
+  testWidgets(
+    'queue stale semantics reorder cannot move its former neighbor',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      try {
+        await _withPlayer(
+          tester,
+          withLibrary: true,
+          run: (fixture) async {
+            final songs = _librarySongs(3);
+            fixture.player.addToQueue(songs);
+            await tester.tap(find.byKey(const Key('nav-2')));
+            await tester.pumpAndSettle();
+            final node = tester.getSemantics(_queueRow(songs[0]));
+            final label = WidgetsLocalizations.of(
+              tester.element(_queueRow(songs[0])),
+            ).reorderItemDown;
+            final action = node
+                .getSemanticsData()
+                .customSemanticsActionIds!
+                .singleWhere(
+                  (id) => CustomSemanticsAction.getAction(id)!.label == label,
+                );
+            node.owner!.performAction(
+              node.id,
+              ui.SemanticsAction.customAction,
+              action,
+            );
+            node.owner!.performAction(
+              node.id,
+              ui.SemanticsAction.customAction,
+              action,
+            );
+            await tester.pumpAndSettle();
+            expect(fixture.player.queue.map((song) => song.id), [
+              songs[1].id,
+              songs[0].id,
+              songs[2].id,
+            ]);
+            expect(tester.takeException(), isNull);
+          },
+        );
+      } finally {
+        semantics.dispose();
+      }
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.windows),
+  );
+
+  for (final released in [false, true]) {
+    testWidgets(
+      'queue drag respects a semantics reorder with pointer released $released',
+      (tester) async {
+        final semantics = tester.ensureSemantics();
+        try {
+          await _withPlayer(
+            tester,
+            withLibrary: true,
+            run: (fixture) async {
+              final songs = _librarySongs(3);
+              fixture.player.addToQueue(songs);
+              await tester.tap(find.byKey(const Key('nav-2')));
+              await tester.pumpAndSettle();
+              final drag = await _dragQueueRow(tester, songs[1]);
+              try {
+                if (released) {
+                  await drag.up();
+                  await tester.pump(const Duration(milliseconds: 30));
+                }
+                final node = tester.getSemantics(_queueRow(songs[0]));
+                final label = WidgetsLocalizations.of(
+                  tester.element(_queueRow(songs[0])),
+                ).reorderItemDown;
+                final action = node
+                    .getSemanticsData()
+                    .customSemanticsActionIds!
+                    .singleWhere(
+                      (id) =>
+                          CustomSemanticsAction.getAction(id)!.label == label,
+                    );
+                node.owner!.performAction(
+                  node.id,
+                  ui.SemanticsAction.customAction,
+                  action,
+                );
+                // Do not pump between the action and pointer release: the guard
+                // must invalidate the old drop even before another frame builds.
+                if (!released) await drag.up();
+                await tester.pumpAndSettle();
+                expect(fixture.player.queue.map((song) => song.id), [
+                  songs[1].id,
+                  songs[0].id,
+                  songs[2].id,
+                ]);
+                expect(tester.takeException(), isNull);
+              } finally {
+                await drag.removePointer();
+              }
+            },
+          );
+        } finally {
+          semantics.dispose();
+        }
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+  }
+
   testWidgets(
     'library removal explains source files stay and queue order can change',
     (tester) async {
@@ -1509,6 +1858,43 @@ bool _primaryFocusWithin(Finder finder) {
     return !found;
   });
   return found;
+}
+
+Finder _queueRow(Song song) => find.byKey(ValueKey('queue-song-${song.id}'));
+
+Future<void> _tabToQueueControl(WidgetTester tester, Finder target) async {
+  for (var step = 0; step < 100; step++) {
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pumpAndSettle();
+    if (_primaryFocusWithin(target)) return;
+  }
+  fail('Keyboard traversal did not reach the queue control.');
+}
+
+Future<TestGesture> _dragQueueRow(
+  WidgetTester tester,
+  Song song, {
+  double direction = 1,
+}) async {
+  final row = _queueRow(song);
+  final handle = find.descendant(
+    of: row,
+    matching: find.byType(ReorderableDragStartListener),
+  );
+  final origin = tester.getCenter(handle);
+  final extent = tester
+      .widget<ReorderableListView>(find.byKey(const Key('queue-list')))
+      .itemExtent!;
+  final drag = await tester.startGesture(origin, kind: PointerDeviceKind.mouse);
+  await drag.moveBy(Offset(0, 10 * direction));
+  await tester.pump();
+  await drag.moveTo(origin + Offset(0, extent * .75 * direction));
+  await tester.pump(const Duration(milliseconds: 300));
+  expect(
+    (tester.getCenter(handle).dy - origin.dy) * direction,
+    greaterThan(extent / 2),
+  );
+  return drag;
 }
 
 Future<_PagePixels> _capturePagePixels(

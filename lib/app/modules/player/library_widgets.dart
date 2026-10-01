@@ -95,7 +95,10 @@ class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
                                     ],
                                   ),
                                 ),
-                                2 => _QueueView(controller: controller),
+                                2 => _QueueView(
+                                  key: ObjectKey(controller),
+                                  controller: controller,
+                                ),
                                 3 => OnlineMusicPage(controller: _online!),
                                 _ => _LibraryView(
                                   controller: controller,
@@ -669,9 +672,98 @@ Future<void> _confirmLibraryRemoval(
   if (confirmed == true) await controller.removeFromLibrary(song);
 }
 
-class _QueueView extends StatelessWidget {
-  const _QueueView({required this.controller});
+class _QueueView extends StatefulWidget {
+  const _QueueView({super.key, required this.controller});
   final PlayerController controller;
+
+  @override
+  State<_QueueView> createState() => _QueueViewState();
+}
+
+class _QueueViewState extends State<_QueueView> {
+  PlayerController get controller => widget.controller;
+  late Worker _queueChanges;
+  List<String>? _dragOrder;
+  SliverReorderableListState? _reorderable;
+  bool _queueCheckScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _listenToQueue();
+  }
+
+  void _listenToQueue() {
+    _queueChanges = ever<List<Song>>(controller.queue, (_) => _checkDragSoon());
+  }
+
+  void _checkDragSoon() {
+    if (_dragOrder == null || _queueCheckScheduled) return;
+    _queueCheckScheduled = true;
+    // RxList.assignAll emits clear/addAll separately. Compare the final IDs
+    // before the next frame so a metadata-only update preserves the drag.
+    Future<void>.microtask(() {
+      _queueCheckScheduled = false;
+      if (!mounted) return;
+      final order = _dragOrder;
+      if (order != null && !_matchesQueue(order)) _cancelDrag();
+    });
+  }
+
+  bool _matchesQueue(List<String> order) {
+    final queue = controller.queue;
+    if (order.length != queue.length) return false;
+    for (var index = 0; index < order.length; index++) {
+      if (order[index] != queue[index].id) return false;
+    }
+    return true;
+  }
+
+  void _cancelDrag() {
+    if (_dragOrder == null) return;
+    _dragOrder = null;
+    final reorderable = _reorderable;
+    if (reorderable != null && reorderable.mounted) {
+      reorderable.cancelReorder();
+    }
+  }
+
+  void _reorderQueue(List<Song> renderedQueue, int oldIndex, int newIndex) {
+    final order = _dragOrder;
+    final valid =
+        _matchesQueue(renderedQueue.map((song) => song.id).toList()) &&
+        (order == null || _matchesQueue(order));
+    // Also handles accessibility reorder actions during a mouse drag. Cancel
+    // before changing the list; onReorderEnd runs before the drop animation ends.
+    _cancelDrag();
+    if (valid) controller.reorderQueue(oldIndex, newIndex);
+  }
+
+  void _moveSong(String id, {required bool down}) {
+    final index = controller.queue.indexWhere((song) => song.id == id);
+    if (index < 0 ||
+        (down ? index == controller.queue.length - 1 : index == 0)) {
+      return;
+    }
+    _cancelDrag();
+    controller.reorderQueue(index, down ? index + 2 : index - 1);
+  }
+
+  void _playSong(String id) {
+    final index = controller.queue.indexWhere((song) => song.id == id);
+    if (index >= 0 && !controller.queue[index].isMissing) {
+      controller.playQueueItem(index);
+    }
+  }
+
+  @override
+  void dispose() {
+    _queueChanges.dispose();
+    _dragOrder = null;
+    _reorderable = null;
+    // The child sliver disposes its gesture and overlay when this view leaves.
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => Column(
@@ -712,8 +804,16 @@ class _QueueView extends StatelessWidget {
             buildDefaultDragHandles: false,
             itemCount: queue.length,
             itemExtent: 76 + (textScale - 1).clamp(0.0, 4.0) * 32,
-            onReorder: controller.reorderQueue,
+            onReorderStart: (_) {
+              _dragOrder = queue.map((song) => song.id).toList();
+              // The handle can still belong to the previous frame. Wait until
+              // the framework finishes starting its drag before cancelling it.
+              _checkDragSoon();
+            },
+            onReorder: (oldIndex, newIndex) =>
+                _reorderQueue(queue, oldIndex, newIndex),
             itemBuilder: (context, index) {
+              _reorderable = SliverReorderableList.of(context);
               final song = queue[index];
               return Container(
                 key: ValueKey('queue-song-${song.id}'),
@@ -745,7 +845,7 @@ class _QueueView extends StatelessWidget {
                         child: InkWell(
                           onTap: song.isMissing
                               ? null
-                              : () => controller.playQueueItem(index),
+                              : () => _playSong(song.id),
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -784,21 +884,21 @@ class _QueueView extends StatelessWidget {
                       tooltip: '播放${song.title}',
                       onPressed: song.isMissing
                           ? null
-                          : () => controller.playQueueItem(index),
+                          : () => _playSong(song.id),
                       icon: const Icon(Icons.play_arrow_rounded, size: 21),
                     ),
                     IconButton(
                       tooltip: '上移',
                       onPressed: index == 0
                           ? null
-                          : () => controller.reorderQueue(index, index - 1),
+                          : () => _moveSong(song.id, down: false),
                       icon: const Icon(Icons.arrow_upward_rounded, size: 18),
                     ),
                     IconButton(
                       tooltip: '下移',
                       onPressed: index == queue.length - 1
                           ? null
-                          : () => controller.reorderQueue(index, index + 2),
+                          : () => _moveSong(song.id, down: true),
                       icon: const Icon(Icons.arrow_downward_rounded, size: 18),
                     ),
                     IconButton(
