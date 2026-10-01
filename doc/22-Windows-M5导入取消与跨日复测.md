@@ -41,6 +41,12 @@
 
 最终全量 `flutter test --no-pub --reporter expanded` **340 项通过**（基线 328 项，本轮新增 12 项），`dart analyze lib test tool` 无问题，81 份 Dart 文件格式检查无变化。日志为 `tests-final.txt`、`analyze-final.txt`、`format-final.txt`。4 份更新文档的 56 个本地链接有效，Git 差异检查通过。本轮未修改音频后端和运行库检查器，不重复把历史原生音频或运行库专项测试写成本轮新证据。
 
+从干净提交 `4480ad8a84a4ac0fda4f6c87b6532d9b1782979d` 强制重建正常 `lib/main.dart` 入口（345.5 秒），生成 `D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-dev.12-M5.zip`。大小 **20,496,564 字节**，SHA-256 为 `4ca066a1039ff9e5e743468f86fb1d54b0a11e7ff3ae72b759b2bbb2a1c4e06d`，共 **35 个文件**。清单记录 `version=0.1.0-dev.12+12`、`gitDirty=false`、`entryPoint=lib/main.dart`、`publicReleaseReady=false`；`data/app.so` SHA-256 为 `c1bdaa6a7159b9087a9d8825ca15743bb55568c7ff2afd4d4145dc490b3f0979`。本次构建运行库下限仍为 14.37.32822.0。
+
+系统 PowerShell **5.1.26100.9444** 下，中文/空格解压路径的完整包 **6 项验收通过**：ZIP 哈希、所有清单文件/路径与无 UserData、运行库声明与实际 DLL 检查、启动器八秒响应、运行时数据目录锁冲突、停止后的锁释放。本机 System32 三份 x64 VC++ DLL 均为 14.51.36247.0。应用及辅助进程按本次 PID、EXE 路径和启动时间核对后精确停止，锁首次重试即取得（85 ms）；此强制停止不替代正常关窗和退出保存验收。
+
+证据为 `package-dev12.txt`、`verify-dev12.txt`、`package-summary.json`、`package-verification-dev12.json`，原始报告位于 `D:\dev\tmp\hanmusic-m5-dev12-package-verification\验收 包 20261001-100720-544-f971c939\verification.json`。构建后仅补文档，不因文档提交重建相同源码二进制；未创建正式 Release。
+
 真实系统文件对话框、原生关窗/最小化、系统 DPI、休眠、设备变化、物理出声、干净机器和发行授权门槛继续保留。
 
 本次只读检查发现 Hyper-V 枚举需要当前进程没有的权限，Windows Sandbox 命令不可用；没有尝试提权、安装组件或改变系统配置，因此没有新增干净虚拟机验收。M5 仍进行中，M6 未开始。
