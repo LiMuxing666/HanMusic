@@ -37,6 +37,12 @@
 
 ## 3. 交付与边界
 
-最终生产补丁完成后，全量 `flutter test --no-pub --reporter expanded` **369 项通过**（新增 14 项），`dart analyze lib test tool` 无问题，格式检查 **81 个文件、0 个变化**。日志为 `tests-final.txt`、`analyze-all-final.txt` 和 `format-all-final.txt`。队列源码和测试指纹、独立复核摘要及曲库实现未变化检查保存在 `change-review.json`，补丁为 `production-and-tests.patch`。
+最终生产补丁完成后，全量 `flutter test --no-pub --reporter expanded` **369 项通过**（新增 14 项，命令墙钟耗时 70.0 秒），`dart analyze lib test tool` 无问题，格式检查 **81 个文件、0 个变化**。日志为 `tests-final.txt`、`analyze-all-final.txt` 和 `format-all-final.txt`。队列源码和测试指纹、独立复核摘要及曲库实现未变化检查保存在 `change-review.json`，补丁为 `production-and-tests.patch`。
 
-正常入口 dev.14 的完整预览打包进行中，完成后补齐产物指纹与检查结果。真实物理出声和完整页面起播、原生系统对话框/窗口/休眠/设备切换、真实系统 DPI、干净 Windows 机器和发行授权/原生对应源码门槛继续按 [开发计划](./05-Windows版本开发计划.md) 保留。M5 完成前不标记正式 v0.1，也不开始依赖它的 M6。
+从干净源码提交 `5cf42c048f676b77bd8dc5f9966d383ab295a989` 重建正常入口 `lib/main.dart` 的 Windows Release，构建阶段 97.1 秒，包含打包的命令墙钟耗时 116.2 秒。版本为 `0.1.0-dev.14+14`，完整 ZIP 为 `D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-dev.14-M5.zip`，大小 **20,503,133 字节**，SHA-256 为 `44d97dc21ed9d7ec1fadf871e189b0c1356aab2cd50cbd48258cd82776c5dc62`。34 个内容文件加清单共 35 个文件，`gitDirty=false`、`entryPoint=lib/main.dart`、`publicReleaseReady=false`；正常应用 `app.so` SHA-256 为 `1101b455b81ae1f19de2c9cac73fa10d431fce459ff46de804052c65a48457c1`。构建日志与清单分别为 `package-dev14.txt`、`package-manifest-dev14.json`。
+
+使用系统 PowerShell **5.1.26100.9444** 在 D 盘独立中文、空格目录解压，完整包 **6 项检查通过**：ZIP 校验、所有清单文件哈希与无预置 UserData、x64 运行库检查、启动器八秒响应、运行中独占数据目录，以及停止后的锁释放。启动器返回 0，数据创建在解压目录的 D 盘 UserData；锁冲突 Win32 错误为 33，精确核对本轮 PID/EXE/启动时间后停止测试进程，首次重试 25 ms 取得锁。应用及辅助进程均已清理，报告为 `package-verification-dev14.json`。
+
+上述是开发机上的完整性、启动和进程锁检查；强制结束不等于正常关窗或持久化验收，没有在该包上操作页面播放、原生选择器或干净机器。四份修改文档共 52 个本地链接检查通过，`git diff --check` 通过。
+
+真实物理出声和完整页面起播、原生系统对话框/窗口/休眠/设备切换、真实系统 DPI、干净 Windows 机器和发行授权/原生对应源码门槛继续按 [开发计划](./05-Windows版本开发计划.md) 保留。M5 完成前不标记正式 v0.1，也不开始依赖它的 M6。
