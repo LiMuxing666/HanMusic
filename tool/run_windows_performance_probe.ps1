@@ -8,6 +8,9 @@ Dart compile-time constant: an environment variable cannot redirect this probe.
 Freeze the entire baseline bundle before building a candidate. Run A/B serially
 with unique RunName values and the same ProbeDirectory, display and workload.
 Do not attach DevTools/CPU collectors or run builds/tests during these captures.
+The current Profile probe also records two post-frame GetThreadTimes snapshots
+on its Dart UI thread. This is aggregate thread execution time, not a CPU
+profiler or a per-frame attribution. Legacy schema-1 bundles omit the field.
 Use -CollectEnvironment for optional one-second read-only host/process samples.
 Use the same setting for every A/B run; sampling overhead is recorded separately.
 
@@ -144,7 +147,7 @@ function Get-NearestRank95 {
 }
 
 function Test-CaptureEvidence {
-    param([string]$JsonPath, [string]$CsvPath, [DateTime]$Launched, [DateTime]$Ended)
+    param([string]$JsonPath, [string]$CsvPath, [DateTime]$Launched, [DateTime]$Ended, [int]$ExpectedProcessId = 0)
     foreach ($file in @($JsonPath, $CsvPath)) {
         Assert-NoLinkedAncestors $file
         $info = Get-Item -LiteralPath $file -Force
@@ -158,7 +161,7 @@ function Test-CaptureEvidence {
     if ($reportStarted.Offset -ne [TimeSpan]::Zero -or $reportStarted.UtcDateTime -lt $Launched -or $reportStarted.UtcDateTime -gt $Ended) {
         throw 'JSON startedAtUtc does not belong to this launch interval.'
     }
-    if ($result.schemaVersion -ne 1 -or $result.completed -ne $true -or $result.buildMode -ne 'profile' -or
+    if ($result.schemaVersion -notin @(1, 2) -or $result.completed -ne $true -or $result.buildMode -ne 'profile' -or
         $result.dataset.songs -ne 10000 -or $result.dataset.synthetic -ne $true -or $result.dataset.artwork -ne $false -or
         $result.dataset.seed -ne 'index-0-through-9999-v1' -or
         $result.sampling.requestedWarmupSeconds -ne 5 -or $result.sampling.requestedMeasurementSeconds -ne 30 -or
@@ -262,6 +265,73 @@ function Test-CaptureEvidence {
             Assert-Near $result.jank.$key.$field $budget[$field] "jank.$key.$field"
         }
     }
+    $uiThreadCpuValidation = [ordered]@{ status = 'legacy_schema1_no_thread_cpu' }
+    if ($result.schemaVersion -eq 2) {
+        $cpu = $result.uiThreadCpu
+        if ($null -eq $cpu -or $cpu.valid -ne $true -or
+            $cpu.method -cne 'GetThreadTimes(current Dart UI isolate thread)' -or
+            $null -eq $cpu.start -or $null -eq $cpu.end) {
+            throw 'Schema-2 UI thread CPU evidence is absent or invalid.'
+        }
+        $start = $cpu.start
+        $finish = $cpu.end
+        $processId = [long]$start.processId
+        $threadId = [long]$start.threadId
+        $startRaw = [long]$start.rawFrameTimestampUs
+        $endRaw = [long]$finish.rawFrameTimestampUs
+        $wallUs = [long]$finish.monotonicUs - [long]$start.monotonicUs
+        $userTicks = [long]$finish.user100ns - [long]$start.user100ns
+        $kernelTicks = [long]$finish.kernel100ns - [long]$start.kernel100ns
+        $rawSpanUs = $endRaw - $startRaw
+        $measuredUs = [long][math]::Round($seconds * 1000000)
+        $frameSpanUs = $previousVsync - $firstVsync
+        $displayPeriodUs = 1000000.0 / $refresh
+        $maxBoundaryOffsetUs = [long][math]::Max(25000.0, [math]::Ceiling(4 * $displayPeriodUs))
+        $firstOffsetUs = $firstVsync - $startRaw
+        $lastOffsetUs = $previousVsync - $endRaw
+        if ($processId -le 0 -or $threadId -le 0 -or $processId -ne [long]$finish.processId -or
+            ($ExpectedProcessId -gt 0 -and $processId -ne $ExpectedProcessId) -or
+            $threadId -ne [long]$finish.threadId -or $start.scrollTick -ne 1 -or
+            $finish.scrollTick -ne $result.sampling.scrollTicks -or
+            $wallUs -lt 29500000 -or $wallUs -gt 32500000 -or
+            $rawSpanUs -lt 29500000 -or $rawSpanUs -gt 32500000 -or
+            [math]::Abs($wallUs - $measuredUs) -gt 1000000 -or
+            [math]::Abs($frameSpanUs - $measuredUs) -gt 1000000 -or
+            [math]::Abs($firstOffsetUs) -gt $maxBoundaryOffsetUs -or
+            [math]::Abs($lastOffsetUs) -gt $maxBoundaryOffsetUs -or
+            $userTicks -lt 0 -or $kernelTicks -lt 0 -or
+            ($userTicks + $kernelTicks) / 10.0 -gt $wallUs + 100000) {
+            throw 'Schema-2 UI thread CPU identity, full-window proximity or counters are inconsistent.'
+        }
+        if ($cpu.nearbyFrameCount -ne $rows.Count -or
+            [long]$cpu.boundaryOffsetsUs.firstCsvVsyncMinusStartRaw -ne $firstOffsetUs -or
+            [long]$cpu.boundaryOffsetsUs.lastCsvVsyncMinusEndRaw -ne $lastOffsetUs -or
+            [long]$cpu.boundaryOffsetsUs.maxAllowedAbs -ne $maxBoundaryOffsetUs) {
+            throw 'Schema-2 nearby frame count or recorded boundary offsets do not match the CSV.'
+        }
+        $nearbySumUs = [long]0
+        foreach ($duration in $ui) { $nearbySumUs += $duration }
+        Assert-Near $cpu.userMs ($userTicks / 10000.0) 'uiThreadCpu.userMs'
+        Assert-Near $cpu.kernelMs ($kernelTicks / 10000.0) 'uiThreadCpu.kernelMs'
+        Assert-Near $cpu.totalMs (($userTicks + $kernelTicks) / 10000.0) 'uiThreadCpu.totalMs'
+        Assert-Near $cpu.monotonicWallMs ($wallUs / 1000.0) 'uiThreadCpu.monotonicWallMs'
+        Assert-Near $cpu.rawTimestampSpanMs ($rawSpanUs / 1000.0) 'uiThreadCpu.rawTimestampSpanMs'
+        Assert-Near $cpu.reportedTickerMeasurementMs ($measuredUs / 1000.0) 'uiThreadCpu.reportedTickerMeasurementMs'
+        Assert-Near $cpu.frameVsyncSpanMs ($frameSpanUs / 1000.0) 'uiThreadCpu.frameVsyncSpanMs'
+        Assert-Near $cpu.boundaryOffsetsUs.displayPeriod $displayPeriodUs 'uiThreadCpu.boundaryOffsetsUs.displayPeriod'
+        Assert-Near $cpu.nearbyFramesBuildWallSumMs ($nearbySumUs / 1000.0) 'uiThreadCpu.nearbyFramesBuildWallSumMs'
+        Assert-Near $cpu.nearbyFramesBuildWallP95Ms $p95.ui 'uiThreadCpu.nearbyFramesBuildWallP95Ms'
+        $uiThreadCpuValidation = [ordered]@{
+            status = 'validated_nearby_window'; processId = $processId; threadId = $threadId
+            startRawTimestampUs = $startRaw; endRawTimestampUs = $endRaw
+            firstCsvVsyncUs = $firstVsync; lastCsvVsyncUs = $previousVsync
+            firstOffsetUs = $firstOffsetUs; lastOffsetUs = $lastOffsetUs
+            maxAllowedAbsoluteOffsetUs = $maxBoundaryOffsetUs
+            nearbyFrameCount = $rows.Count
+            aggregateCpuMs = ($userTicks + $kernelTicks) / 10000.0
+            monotonicWallMs = $wallUs / 1000.0
+        }
+    }
     return [ordered]@{
         validCapture = $true
         reportStartedAtUtc = $reportStarted.UtcDateTime.ToString('o')
@@ -270,6 +340,7 @@ function Test-CaptureEvidence {
         sampling = $result.sampling
         scroll = $result.scroll
         memory = $result.memory
+        uiThreadCpu = $uiThreadCpuValidation
         recalculated = [ordered]@{
             frameCount = $rows.Count; firstFrame = $firstFrame; lastFrame = $previousFrame
             frameNumbersAndVsyncStrictlyIncreasing = $true; csvVsyncSpanSeconds = $csvSpan
@@ -427,7 +498,7 @@ try {
         if ($item) { [ordered]@{ path = $_; bytes = $item.Length; lastWriteTimeUtc = $item.LastWriteTimeUtc.ToString('o') } }
     }
     if ($exitValue -ne 0) { throw "Profile process failed with exit code $exitValue; inspect preserved evidence." }
-    $metadata.validation = Test-CaptureEvidence "$prefix.json" "$prefix.frames.csv" $launched $ended
+    $metadata.validation = Test-CaptureEvidence "$prefix.json" "$prefix.frames.csv" $launched $ended $process.Id
     $metadata.validCapture = $true
 } catch {
     $metadata.failure = $_.Exception.Message

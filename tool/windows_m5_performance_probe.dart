@@ -2,10 +2,12 @@
 // point before distributing the app. No media files or user storage are read.
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi' as ffi;
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui';
 
+import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -19,6 +21,136 @@ import 'package:han_music/app/modules/player/view.dart';
 import 'package:han_music/app/services/library_service.dart';
 import 'package:han_music/app/services/player_service.dart';
 import 'package:han_music/app/services/timer_service.dart';
+
+final class _FileTime extends ffi.Struct {
+  @ffi.Uint32()
+  external int low;
+
+  @ffi.Uint32()
+  external int high;
+
+  int get ticks => (high << 32) | low;
+}
+
+typedef _GetCurrentThreadIdNative = ffi.Uint32 Function();
+typedef _GetCurrentThreadNative = ffi.Pointer<ffi.Void> Function();
+typedef _GetThreadTimesNative =
+    ffi.Int32 Function(
+      ffi.Pointer<ffi.Void>,
+      ffi.Pointer<_FileTime>,
+      ffi.Pointer<_FileTime>,
+      ffi.Pointer<_FileTime>,
+      ffi.Pointer<_FileTime>,
+    );
+
+final class _UiThreadCpuSnapshot {
+  const _UiThreadCpuSnapshot({
+    required this.processId,
+    required this.threadId,
+    required this.rawFrameTimestampUs,
+    required this.scrollTick,
+    required this.monotonicUs,
+    required this.user100ns,
+    required this.kernel100ns,
+  });
+
+  final int processId;
+  final int threadId;
+  final int rawFrameTimestampUs;
+  final int scrollTick;
+  final int monotonicUs;
+  final int user100ns;
+  final int kernel100ns;
+
+  Map<String, int> toJson() => {
+    'processId': processId,
+    'threadId': threadId,
+    'rawFrameTimestampUs': rawFrameTimestampUs,
+    'scrollTick': scrollTick,
+    'monotonicUs': monotonicUs,
+    'user100ns': user100ns,
+    'kernel100ns': kernel100ns,
+  };
+}
+
+/// Two synchronous reads on the Dart UI isolate; no profiler or per-frame FFI.
+final class _UiThreadCpuClock {
+  _UiThreadCpuClock() {
+    final kernel32 = ffi.DynamicLibrary.open('kernel32.dll');
+    _getCurrentThreadId = kernel32
+        .lookupFunction<_GetCurrentThreadIdNative, int Function()>(
+          'GetCurrentThreadId',
+        );
+    _getCurrentThread = kernel32
+        .lookupFunction<
+          _GetCurrentThreadNative,
+          ffi.Pointer<ffi.Void> Function()
+        >('GetCurrentThread');
+    _getThreadTimes = kernel32
+        .lookupFunction<
+          _GetThreadTimesNative,
+          int Function(
+            ffi.Pointer<ffi.Void>,
+            ffi.Pointer<_FileTime>,
+            ffi.Pointer<_FileTime>,
+            ffi.Pointer<_FileTime>,
+            ffi.Pointer<_FileTime>,
+          )
+        >('GetThreadTimes');
+    // All allocation and symbol lookup happen before the five-second warmup.
+    _times = calloc<_FileTime>(4);
+    _wall.start();
+  }
+
+  late final int Function() _getCurrentThreadId;
+  late final ffi.Pointer<ffi.Void> Function() _getCurrentThread;
+  late final int Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<_FileTime>,
+    ffi.Pointer<_FileTime>,
+    ffi.Pointer<_FileTime>,
+    ffi.Pointer<_FileTime>,
+  )
+  _getThreadTimes;
+  late final ffi.Pointer<_FileTime> _times;
+  final Stopwatch _wall = Stopwatch();
+  bool _disposed = false;
+
+  _UiThreadCpuSnapshot read(int rawFrameTimestampUs, int scrollTick) {
+    if (_disposed) throw StateError('UI thread CPU clock has been disposed.');
+    final threadId = _getCurrentThreadId();
+    final creation = _times;
+    final exit = _times + 1;
+    final kernel = _times + 2;
+    final user = _times + 3;
+    final succeeded = _getThreadTimes(
+      _getCurrentThread(),
+      creation,
+      exit,
+      kernel,
+      user,
+    );
+    if (succeeded == 0) {
+      throw StateError('GetThreadTimes failed for the current UI thread.');
+    }
+    return _UiThreadCpuSnapshot(
+      processId: pid,
+      threadId: threadId,
+      rawFrameTimestampUs: rawFrameTimestampUs,
+      scrollTick: scrollTick,
+      monotonicUs: _wall.elapsedMicroseconds,
+      user100ns: user.ref.ticks,
+      kernel100ns: kernel.ref.ticks,
+    );
+  }
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _wall.stop();
+    calloc.free(_times);
+  }
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -121,6 +253,9 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
   final _memory = <Map<String, Object?>>[];
   final _lifecycle = <String>[];
   final _accessibilityChanges = <Map<String, Object?>>[];
+  final _uiThreadCpuClock = _UiThreadCpuClock();
+  _UiThreadCpuSnapshot? _uiCpuStart;
+  _UiThreadCpuSnapshot? _uiCpuEnd;
   late final Map<String, Object?> _initialAccessibility;
   Map<String, Object?>? _measurementStartAccessibility;
   Map<String, Object?>? _measurementEndAccessibility;
@@ -197,6 +332,18 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
       // One boundary snapshot, not a query on every measured frame.
       _measurementStartAccessibility = _accessibilitySnapshot();
       _previousOffset = offset;
+      final startRawTimestampUs = _startUs!;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_finished) return;
+        try {
+          _uiCpuStart = _uiThreadCpuClock.read(
+            startRawTimestampUs,
+            _scrollTicks,
+          );
+        } catch (error) {
+          widget.errors.add('UI thread CPU start: $error');
+        }
+      });
     }
     if (_startUs != null) {
       _scrollTicks++;
@@ -212,7 +359,17 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
         elapsed - _measurementStartedAt! >= _measurement) {
       _endUs =
           SchedulerBinding.instance.currentSystemFrameTimeStamp.inMicroseconds;
-      unawaited(_finish());
+      final endRawTimestampUs = _endUs!;
+      _ticker.stop();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_finished) return;
+        try {
+          _uiCpuEnd = _uiThreadCpuClock.read(endRawTimestampUs, _scrollTicks);
+        } catch (error) {
+          widget.errors.add('UI thread CPU end: $error');
+        }
+        unawaited(_finish());
+      });
     }
   }
 
@@ -289,6 +446,102 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
     });
   }
 
+  Map<String, Object?> _summarizeUiThreadCpu() {
+    final start = _uiCpuStart;
+    final end = _uiCpuEnd;
+    if (start == null || end == null) {
+      widget.errors.add(
+        'UI thread CPU post-frame boundary snapshot is missing.',
+      );
+      return {'valid': false, 'start': start?.toJson(), 'end': end?.toJson()};
+    }
+
+    final user100ns = end.user100ns - start.user100ns;
+    final kernel100ns = end.kernel100ns - start.kernel100ns;
+    final wallUs = end.monotonicUs - start.monotonicUs;
+    final firstVsyncUs = _timings.isEmpty
+        ? null
+        : _timings.first.timestampInMicroseconds(FramePhase.vsyncStart);
+    final lastVsyncUs = _timings.isEmpty
+        ? null
+        : _timings.last.timestampInMicroseconds(FramePhase.vsyncStart);
+    final firstOffsetUs = firstVsyncUs == null
+        ? null
+        : firstVsyncUs - start.rawFrameTimestampUs;
+    final lastOffsetUs = lastVsyncUs == null
+        ? null
+        : lastVsyncUs - end.rawFrameTimestampUs;
+    final displayPeriodUs = 1000000 / _refreshRate;
+    // Pre-registered window guard: at least 25 ms or four display periods.
+    // Proximity does not claim equal phases or an exact frame/CPU pairing.
+    final maxBoundaryOffsetUs = math.max(25000, (4 * displayPeriodUs).ceil());
+    final measuredUs = _measurementStartedAt == null
+        ? 0
+        : (_lastElapsed - _measurementStartedAt!).inMicroseconds;
+    final rawTimestampSpanUs =
+        end.rawFrameTimestampUs - start.rawFrameTimestampUs;
+    final frameVsyncSpanUs = firstVsyncUs == null || lastVsyncUs == null
+        ? 0
+        : lastVsyncUs - firstVsyncUs;
+    final nearbyBuildUs = _timings
+        .map((frame) => frame.buildDuration.inMicroseconds)
+        .toList();
+    final valid =
+        start.processId == pid &&
+        end.processId == pid &&
+        start.threadId != 0 &&
+        start.threadId == end.threadId &&
+        start.scrollTick == 1 &&
+        end.scrollTick == _scrollTicks &&
+        firstOffsetUs != null &&
+        lastOffsetUs != null &&
+        firstOffsetUs.abs() <= maxBoundaryOffsetUs &&
+        lastOffsetUs.abs() <= maxBoundaryOffsetUs &&
+        nearbyBuildUs.isNotEmpty &&
+        wallUs >= 29500000 &&
+        wallUs <= 32500000 &&
+        rawTimestampSpanUs >= 29500000 &&
+        rawTimestampSpanUs <= 32500000 &&
+        (wallUs - measuredUs).abs() <= 1000000 &&
+        (frameVsyncSpanUs - measuredUs).abs() <= 1000000 &&
+        user100ns >= 0 &&
+        kernel100ns >= 0 &&
+        // Allow for timer resolution and native call boundary uncertainty.
+        (user100ns + kernel100ns) / 10 <= wallUs + 100000;
+    if (!valid) {
+      widget.errors.add(
+        'UI thread CPU identity, nearby window or counter validation failed.',
+      );
+    }
+    return {
+      'valid': valid,
+      'method': 'GetThreadTimes(current Dart UI isolate thread)',
+      'boundary':
+          'Two post-frame CPU snapshots bracket an approximately 30-second scroll workload. Raw onBeginFrame timestamps and FrameTiming OS vsyncStart timestamps have different phases; nearby frame rows are not exactly paired to the CPU interval.',
+      'scope':
+          'Aggregate CPU execution on the Dart UI isolate thread, including frame and other same-thread work. This is not process or host CPU and cannot attribute CPU or waiting to individual frames; boundary-frame uncertainty is not quantified.',
+      'start': start.toJson(),
+      'end': end.toJson(),
+      'userMs': user100ns / 10000,
+      'kernelMs': kernel100ns / 10000,
+      'totalMs': (user100ns + kernel100ns) / 10000,
+      'monotonicWallMs': wallUs / 1000,
+      'rawTimestampSpanMs': rawTimestampSpanUs / 1000,
+      'reportedTickerMeasurementMs': measuredUs / 1000,
+      'frameVsyncSpanMs': frameVsyncSpanUs / 1000,
+      'boundaryOffsetsUs': {
+        'firstCsvVsyncMinusStartRaw': firstOffsetUs,
+        'lastCsvVsyncMinusEndRaw': lastOffsetUs,
+        'maxAllowedAbs': maxBoundaryOffsetUs,
+        'displayPeriod': displayPeriodUs,
+      },
+      'nearbyFrameCount': nearbyBuildUs.length,
+      'nearbyFramesBuildWallSumMs':
+          nearbyBuildUs.fold<int>(0, (a, b) => a + b) / 1000,
+      'nearbyFramesBuildWallP95Ms': _distribution(nearbyBuildUs)['p95'],
+    };
+  }
+
   Future<void> _finish() async {
     if (_finished) return;
     _finished = true;
@@ -315,14 +568,17 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
     final measuredSeconds = _measurementStartedAt == null
         ? 0.0
         : (_lastElapsed - _measurementStartedAt!).inMicroseconds / 1000000;
+    final uiThreadCpu = _summarizeUiThreadCpu();
+    _uiThreadCpuClock.dispose();
     final completed =
         _endUs != null &&
         _timings.isNotEmpty &&
+        uiThreadCpu['valid'] == true &&
         widget.errors.isEmpty &&
         _metricsChanges == 0 &&
         _accessibilityChanges.isEmpty;
     final result = <String, Object?>{
-      'schemaVersion': 1,
+      'schemaVersion': 2,
       'completed': completed,
       'startedAtUtc': _startedAt.toIso8601String(),
       'buildMode': 'profile',
@@ -377,6 +633,7 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
         'raster': _distribution(rasterTimes),
         'totalSpan': _distribution(totalTimes),
       },
+      'uiThreadCpu': uiThreadCpu,
       'jank': {
         'definition':
             'A sampled frame is over budget when UI build OR raster duration exceeds one display interval. totalSpan is latency, reported separately.',
@@ -447,6 +704,7 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
     _scroll.dispose();
     _memoryTimer?.cancel();
     _watchdog?.cancel();
+    _uiThreadCpuClock.dispose();
     super.dispose();
   }
 }
