@@ -16,6 +16,7 @@ import 'app/data/repositories/online_source_store.dart';
 import 'app/data/sources/just_audio_backend.dart';
 import 'app/data/sources/windows_power_events.dart';
 import 'app/routes/app_pages.dart';
+import 'app/modules/player/controller.dart';
 import 'app/modules/startup/startup_failure_app.dart';
 import 'app/modules/startup/unsaved_exit_dialog.dart';
 import 'app/services/app_persistence_service.dart';
@@ -163,6 +164,9 @@ class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
         // Each canceled exit gets a fresh checkpoint on its next attempt.
         _sourceSaveOnExit = Get.find<OnlineMusicService>().beginExit();
         Get.find<LibraryService>().cancelImport();
+        if (Get.isRegistered<PlayerController>()) {
+          Get.find<PlayerController>().beginExit();
+        }
       },
       pause: Get.find<PlayerService>().pause,
       flush: () async {
@@ -205,6 +209,9 @@ class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
     final allowExit = await _shutdownCoordinator.shutdown();
     if (!allowExit) {
       Get.find<OnlineMusicService>().cancelExit();
+      if (Get.isRegistered<PlayerController>()) {
+        Get.find<PlayerController>().cancelExit();
+      }
       if (mounted) setState(() => _closing = false);
     }
     return allowExit ? AppExitResponse.exit : AppExitResponse.cancel;

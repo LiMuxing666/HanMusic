@@ -516,6 +516,112 @@ void main() {
     (size: const Size(1280, 720), scale: 1.0),
     (size: const Size(800, 600), scale: 2.0),
   ]) {
+    for (final offscreen in [false, true]) {
+      testWidgets(
+        'library identity preserves ${offscreen ? "offscreen" : "visible"} keyboard focus through index changes at ${configuration.size} scale ${configuration.scale}',
+        (tester) async {
+          await _withPlayer(
+            tester,
+            withLibrary: true,
+            size: configuration.size,
+            textScale: configuration.scale,
+            run: (fixture) async {
+              final songs = _librarySongs(40);
+              // Two preceding songs make deletion and filtering independently
+              // move the retained target: original index 2 -> 1 -> 0.
+              final target = songs[2];
+              fixture.library!.replaceAll(songs);
+              await tester.pumpAndSettle();
+              final list = find.byKey(const Key('library-list'));
+              final extent = tester.widget<ListView>(list).itemExtent!;
+              // Materialize B before keyboard traversal, including the compact
+              // viewport where the third row initially sits below the fold.
+              await tester.sendEventToBinding(
+                PointerScrollEvent(
+                  position: tester.getCenter(list),
+                  scrollDelta: Offset(0, extent * 2),
+                ),
+              );
+              await tester.pumpAndSettle();
+              final targetRow = find.byKey(
+                ValueKey('library-song-${target.id}'),
+                skipOffstage: false,
+              );
+              for (var step = 0; step < 100; step++) {
+                await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+                await tester.pumpAndSettle();
+                if (_primaryFocusWithin(targetRow)) break;
+              }
+              expect(_primaryFocusWithin(targetRow), isTrue);
+              final targetFocus = FocusManager.instance.primaryFocus;
+              if (offscreen) {
+                for (var page = 0; page < 4; page++) {
+                  await tester.sendKeyEvent(LogicalKeyboardKey.pageDown);
+                  await tester.pumpAndSettle();
+                }
+                final position = tester
+                    .state<ScrollableState>(
+                      find.descendant(
+                        of: list,
+                        matching: find.byType(Scrollable),
+                      ),
+                    )
+                    .position;
+                expect(
+                  position.pixels,
+                  greaterThan(position.viewportDimension),
+                );
+                expect(_primaryFocusWithin(targetRow), isTrue);
+              }
+
+              // Controller-driven mutations exercise framework state updates;
+              // they do not stand in for a native dialog or keyboard workflow.
+              await fixture.controller.removeFromLibrary(songs.first);
+              await tester.pumpAndSettle();
+              expect(
+                FocusManager.instance.primaryFocus,
+                same(targetFocus),
+                reason: 'Removing an earlier song must not replace B\'s focus.',
+              );
+              expect(_primaryFocusWithin(targetRow), isTrue);
+
+              fixture.controller.setSearchQuery(target.title);
+              await tester.pumpAndSettle();
+              expect(fixture.controller.visibleSongs.single.id, target.id);
+              expect(FocusManager.instance.primaryFocus, same(targetFocus));
+              expect(_primaryFocusWithin(targetRow), isTrue);
+              await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+              await tester.pumpAndSettle();
+              expect(fixture.player.currentSong.value?.id, target.id);
+              expect(fixture.player.queue.single.id, target.id);
+
+              fixture.controller.setSearchQuery('');
+              await tester.pumpAndSettle();
+              expect(FocusManager.instance.primaryFocus, same(targetFocus));
+              await fixture.controller.removeFromLibrary(target);
+              await tester.pumpAndSettle();
+              expect(targetRow, findsNothing);
+              expect(
+                FocusManager.instance.primaryFocus,
+                isNot(same(targetFocus)),
+              );
+              final played = fixture.backend.playCalls;
+              await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+              await tester.pumpAndSettle();
+              expect(
+                fixture.backend.playCalls,
+                played,
+                reason: 'Removing B must not transfer its activation to C.',
+              );
+              expect(fixture.player.currentSong.value, isNull);
+              expect(tester.takeException(), isNull);
+            },
+          );
+        },
+        variant: TargetPlatformVariant.only(TargetPlatform.windows),
+      );
+    }
+
     testWidgets(
       'Windows keyboard paging retains focus without retaining the library at ${configuration.size} scale ${configuration.scale}',
       (tester) async {

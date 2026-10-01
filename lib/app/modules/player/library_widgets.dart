@@ -394,12 +394,24 @@ class _LibraryView extends StatelessWidget {
           }
           final textScale = MediaQuery.textScalerOf(context).scale(14) / 14;
           final rowExtent = 78 + (textScale - 1).clamp(0.0, 4.0) * 36;
+          // Resolve moved rows by song identity, preserving their focused state.
+          // Build this snapshot's lookup only when the sliver needs to remap;
+          // ordinary scrolling does not create a map for the entire library.
+          Map<String, int>? songIndexes;
           return LayoutBuilder(
             builder: (context, bounds) => ListView.builder(
               key: const Key('library-list'),
               controller: scrollController,
               itemCount: songs.length,
               itemExtent: rowExtent,
+              findChildIndexCallback: (key) {
+                if (key is! ValueKey<String>) return null;
+                final indexes = songIndexes ??= {
+                  for (var index = 0; index < songs.length; index++)
+                    songs[index].id: index,
+                };
+                return indexes[key.value];
+              },
               // Build rows as they enter the viewport, without offscreen layout.
               cacheExtent: 0,
               // InkWell requests keep-alive only for active ink/focus, allowing
@@ -407,6 +419,7 @@ class _LibraryView extends StatelessWidget {
               addAutomaticKeepAlives: true,
               padding: const EdgeInsets.only(bottom: 14),
               itemBuilder: (context, index) => _LibrarySongRow(
+                key: ValueKey(songs[index].id),
                 song: songs[index],
                 current: currentId == songs[index].id,
                 wide: bounds.maxWidth >= 850,
@@ -473,6 +486,7 @@ class _LibraryEmpty extends StatelessWidget {
 
 class _LibrarySongRow extends StatelessWidget {
   const _LibrarySongRow({
+    super.key,
     required this.song,
     required this.current,
     required this.wide,

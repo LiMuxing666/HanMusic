@@ -189,6 +189,69 @@ void main() {
     expect(backend.playCalls, 0);
   });
 
+  for (final entry in ['single', 'files', 'directory']) {
+    test(
+      'exit gates $entry picker and ignores its late error after cancel',
+      () async {
+        final library = _FakeLibrary();
+        final libraryPicker = _FakeLibraryPicker();
+        final pending = Completer<void>();
+        if (entry != 'single') {
+          controller.onDelete();
+          controller = PlayerController(
+            player: player,
+            timer: timer,
+            picker: picker,
+            library: library,
+            libraryPicker: libraryPicker,
+          )..onStart();
+        }
+        picker.pickAction = () async {
+          await pending.future;
+          return song;
+        };
+        libraryPicker.filesAction = () async {
+          await pending.future;
+          return [song.path];
+        };
+        libraryPicker.directoryAction = () async {
+          await pending.future;
+          return r'D:\music';
+        };
+        Future<void> import() => entry == 'directory'
+            ? controller.importDirectory()
+            : controller.importFile();
+        int calls() =>
+            picker.calls +
+            libraryPicker.fileCalls +
+            libraryPicker.directoryCalls;
+        try {
+          controller.beginExit();
+          await import();
+          expect(calls(), 0);
+          controller.cancelExit();
+          final importing = import();
+          expect(calls(), 1);
+          controller.beginExit();
+          controller.cancelExit();
+          await import();
+          expect(calls(), 1);
+          expect(controller.isImporting.value, isTrue);
+          controller.errorMessage.value = '保留当前退出错误提示';
+          pending.completeError(StateError('obsolete picker failure'));
+          await importing;
+          expect(controller.errorMessage.value, '保留当前退出错误提示');
+          expect(controller.isImporting.value, isFalse);
+          expect(library.received, isEmpty);
+          expect(backend.loadedUris, isEmpty);
+        } finally {
+          if (!pending.isCompleted) pending.complete();
+          library.onClose();
+        }
+      },
+    );
+  }
+
   test(
     'resume checks an overdue timer and pauses audio exactly once',
     () async {
@@ -466,6 +529,7 @@ class _FakeLibraryPicker implements LibraryPicker {
   int fileCalls = 0;
   int directoryCalls = 0;
   Future<List<String>> Function()? filesAction;
+  Future<String?> Function()? directoryAction;
   @override
   Future<List<String>> pickFiles() async {
     fileCalls++;
@@ -475,7 +539,7 @@ class _FakeLibraryPicker implements LibraryPicker {
   @override
   Future<String?> pickDirectory() async {
     directoryCalls++;
-    return directory;
+    return directoryAction == null ? directory : await directoryAction!();
   }
 }
 

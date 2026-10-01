@@ -47,6 +47,9 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
   final _zeroCount = 0.obs;
   final _emptyStatus = RxnString();
   bool _closed = false;
+  bool _exitPending = false;
+  int _importGeneration = 0;
+  int? _activeImport;
 
   bool get hasLibrary => _library != null;
   RxList<Song> get songs => _library?.songs ?? _emptySongs;
@@ -95,23 +98,25 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
       await _importLibrary(directory: false);
       return;
     }
-    if (_closed || isImporting.value || isLoading.value) return;
-    isImporting.value = true;
+    if (_closed || _exitPending || isImporting.value || isLoading.value) return;
+    final operation = _beginImport();
     try {
       final song = await _picker.pick();
-      if (!_closed && song != null) await _player.open(song);
+      if (_canApplyImport(operation) && song != null) await _player.open(song);
     } catch (_) {
-      if (!_closed) errorMessage.value = '无法打开所选文件，请检查文件是否存在及访问权限。';
+      if (_canApplyImport(operation)) {
+        errorMessage.value = '无法打开所选文件，请检查文件是否存在及访问权限。';
+      }
     } finally {
-      if (!_closed) isImporting.value = false;
+      _finishImport(operation);
     }
   }
 
   Future<void> importDirectory() => _importLibrary(directory: true);
 
   Future<void> _importLibrary({required bool directory}) async {
-    if (_closed || _library == null || libraryBusy) return;
-    isImporting.value = true;
+    if (_closed || _exitPending || _library == null || libraryBusy) return;
+    final operation = _beginImport();
     try {
       final List<String> paths;
       if (directory) {
@@ -120,14 +125,48 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
       } else {
         paths = await _libraryPicker.pickFiles();
       }
-      if (_closed || paths.isEmpty) return;
+      if (!_canApplyImport(operation) || paths.isEmpty) return;
       await _library.importPaths(paths);
-      if (!_closed) _player.updateSongs(_library.songs.toList());
+      if (_canApplyImport(operation)) {
+        _player.updateSongs(_library.songs.toList());
+      }
     } catch (_) {
-      if (!_closed) errorMessage.value = '无法导入音乐，请检查所选位置及访问权限。';
+      if (_canApplyImport(operation)) {
+        errorMessage.value = '无法导入音乐，请检查所选位置及访问权限。';
+      }
     } finally {
-      if (!_closed) isImporting.value = false;
+      _finishImport(operation);
     }
+  }
+
+  /// Invalidates the whole import, including a picker that has not replied yet.
+  /// The picker API cannot dismiss an open native dialog, so keep it busy until
+  /// its result settles. Canceling exit must not open a second dialog beside it.
+  void beginExit() {
+    if (_closed || _exitPending) return;
+    _exitPending = true;
+    _importGeneration++;
+  }
+
+  /// A canceled exit allows new imports once the old picker has settled.
+  void cancelExit() {
+    if (!_closed) _exitPending = false;
+  }
+
+  int _beginImport() {
+    final operation = ++_importGeneration;
+    _activeImport = operation;
+    isImporting.value = true;
+    return operation;
+  }
+
+  bool _canApplyImport(int operation) =>
+      !_closed && !_exitPending && operation == _importGeneration;
+
+  void _finishImport(int operation) {
+    if (_activeImport != operation) return;
+    _activeImport = null;
+    if (!_closed) isImporting.value = false;
   }
 
   void cancelImport() => _library?.cancelImport();
@@ -205,6 +244,7 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
   @override
   void onClose() {
     _closed = true;
+    _importGeneration++;
     WidgetsBinding.instance.removeObserver(this);
     super.onClose();
   }
