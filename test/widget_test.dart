@@ -2306,6 +2306,96 @@ void main() {
     );
   });
 
+  for (final withLibrary in [true, false]) {
+    testWidgets(
+      'retry playback preserves the current queue withLibrary $withLibrary',
+      (tester) async {
+        await _withPlayer(
+          tester,
+          withLibrary: withLibrary,
+          size: const Size(800, 600),
+          textScale: 2,
+          run: (fixture) async {
+            final songs = _librarySongs(2);
+            final current = songs.last;
+            fixture.library?.replaceAll(songs);
+            fixture.controller.skipOnError.value = false;
+            fixture.backend.loadFailure = StateError('controlled load failure');
+            await fixture.player.playQueue(songs, startIndex: 1);
+            await tester.pumpAndSettle();
+            final retry = find.byKey(const Key('retry-playback'));
+            expect(fixture.controller.canPlay, isFalse);
+            expect(fixture.player.isPlaying.value, isFalse);
+            expect(fixture.player.currentSong.value?.id, current.id);
+            expect(fixture.player.queue.toList(), songs);
+            expect(fixture.backend.loadedUris, [current.uri]);
+            await tester.ensureVisible(retry);
+            await tester.pumpAndSettle();
+            expect(retry.hitTestable(), findsOneWidget);
+            expect(
+              find.descendant(of: retry, matching: find.text('重试播放')),
+              findsOneWidget,
+            );
+            await tester.ensureVisible(_playButton);
+            await tester.pumpAndSettle();
+            expect(_playButton.hitTestable(), findsOneWidget);
+            expect(tester.widget<IconButton>(_playButton).onPressed, isNotNull);
+            expect(tester.widget<IconButton>(_playButton).tooltip, '重试播放');
+            expect(tester.takeException(), isNull);
+
+            fixture.backend.loadFailure = null;
+            if (withLibrary) {
+              await tester.ensureVisible(retry);
+              await tester.tap(retry, kind: PointerDeviceKind.mouse);
+            } else {
+              final dismiss = find.byTooltip('关闭提示');
+              await tester.ensureVisible(dismiss);
+              await tester.tap(dismiss, kind: PointerDeviceKind.mouse);
+              await tester.pumpAndSettle();
+              expect(fixture.player.errorMessage.value, isNull);
+              expect(retry, findsNothing);
+              expect(tester.widget<IconButton>(_playButton).tooltip, '重试播放');
+              await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+              await tester.pumpAndSettle();
+              for (
+                var step = 0;
+                !_primaryFocusWithin(_playButton) && step < 100;
+                step++
+              ) {
+                await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+                await tester.pumpAndSettle();
+              }
+              expect(_primaryFocusWithin(_playButton), isTrue);
+              expect(_playButton.hitTestable(), findsOneWidget);
+              await tester.sendKeyEvent(LogicalKeyboardKey.space);
+            }
+            await tester.pumpAndSettle();
+            expect(fixture.player.isPlaying.value, isTrue);
+            expect(fixture.controller.canPlay, isTrue);
+            expect(fixture.player.currentSong.value?.id, current.id);
+            expect(fixture.player.queue.toList(), songs);
+            expect(fixture.backend.loadedUris, [current.uri, current.uri]);
+            expect(fixture.backend.playCalls, 1);
+            expect(fixture.player.errorMessage.value, isNull);
+            expect(retry, findsNothing);
+
+            for (final message in ['音量调整失败，请重试。', '导入音乐失败，请检查文件权限。']) {
+              fixture.player.errorMessage.value = message;
+              await tester.pumpAndSettle();
+              expect(find.text(message), findsOneWidget);
+              expect(fixture.controller.canPlay, isTrue);
+              expect(retry, findsNothing);
+              expect(tester.widget<IconButton>(_playButton).tooltip, '暂停');
+              expect(tester.takeException(), isNull);
+            }
+            expect(fixture.backend.loadedUris, [current.uri, current.uri]);
+          },
+        );
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+  }
+
   testWidgets('loading state disables import, playback, and seeking', (
     tester,
   ) async {

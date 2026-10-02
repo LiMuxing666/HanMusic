@@ -88,6 +88,19 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
       canPlay &&
       !isLoading.value;
   bool get canPlay => _player.canPlay;
+  bool get canRetryPlayback {
+    if (_closed ||
+        _exitPending ||
+        isLoading.value ||
+        isPlaying.value ||
+        canPlay) {
+      return false;
+    }
+    final song = currentSong.value;
+    if (song == null || song.isMissing) return false;
+    return queue.any((item) => item.id == song.id && !item.isMissing);
+  }
+
   int get selectionRevision => _player.selectionRevision;
 
   @override
@@ -241,6 +254,13 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
   }
 
   Future<void> togglePlayback() => _player.togglePlayback();
+  Future<void> retryPlayback(String songId) async {
+    if (!canRetryPlayback || currentSong.value?.id != songId) return;
+    // The queue can be reordered between rendering the action and invoking it.
+    final index = queue.indexWhere((song) => song.id == songId);
+    if (index >= 0) await _player.playAt(index);
+  }
+
   Future<void> seek(Duration value) => _player.seek(value);
   Future<void> setVolume(double value) async {
     if (_closed || _exitPending || !value.isFinite) return;

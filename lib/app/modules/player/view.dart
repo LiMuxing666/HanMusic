@@ -107,11 +107,15 @@ class PlayerPage extends StatelessWidget {
                               if (error == null || error.isEmpty) {
                                 return const SizedBox.shrink();
                               }
+                              final song = controller.currentSong.value;
                               return Padding(
                                 padding: const EdgeInsets.only(bottom: 18),
                                 child: _ErrorNotice(
                                   message: error,
                                   onDismiss: controller.dismissError,
+                                  onRetry: controller.canRetryPlayback
+                                      ? () => controller.retryPlayback(song!.id)
+                                      : null,
                                 ),
                               );
                             }),
@@ -706,7 +710,8 @@ class _PlaybackCard extends StatelessWidget {
         final duration = controller.duration.value;
         final position = controller.position.value;
         final volume = controller.volume.value;
-        final enabled = controller.canPlay && !loading && !importing;
+        final retry = controller.canRetryPlayback;
+        final enabled = (controller.canPlay || retry) && !loading && !importing;
         return Column(
           children: [
             _ProgressSlider(
@@ -714,7 +719,7 @@ class _PlaybackCard extends StatelessWidget {
               selectionRevision: controller.selectionRevision,
               position: position,
               duration: duration,
-              enabled: enabled && duration > Duration.zero,
+              enabled: enabled && !retry && duration > Duration.zero,
               onSeek: controller.seek,
             ),
             const SizedBox(height: 12),
@@ -722,8 +727,16 @@ class _PlaybackCard extends StatelessWidget {
               children: [
                 IconButton.filled(
                   key: const Key('toggle-playback'),
-                  tooltip: playing ? '暂停' : '播放',
-                  onPressed: enabled ? controller.togglePlayback : null,
+                  tooltip: retry
+                      ? '重试播放'
+                      : playing
+                      ? '暂停'
+                      : '播放',
+                  onPressed: !enabled
+                      ? null
+                      : retry
+                      ? () => controller.retryPlayback(song!.id)
+                      : controller.togglePlayback,
                   style: IconButton.styleFrom(
                     minimumSize: const Size.square(52),
                     maximumSize: const Size.square(52),
@@ -747,6 +760,8 @@ class _PlaybackCard extends StatelessWidget {
                         ? '正在加载音乐'
                         : song == null
                         ? '导入音乐后开始播放'
+                        : retry
+                        ? '加载失败，可重试当前歌曲'
                         : playing
                         ? '享受此刻的旋律'
                         : '准备好，继续聆听',
@@ -1181,10 +1196,15 @@ String _sleepTimerSummary(
 };
 
 class _ErrorNotice extends StatelessWidget {
-  const _ErrorNotice({required this.message, required this.onDismiss});
+  const _ErrorNotice({
+    required this.message,
+    required this.onDismiss,
+    this.onRetry,
+  });
 
   final String message;
   final VoidCallback onDismiss;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -1211,6 +1231,12 @@ class _ErrorNotice extends StatelessWidget {
                 style: const TextStyle(color: Color(0xFF7D4835), fontSize: 13),
               ),
             ),
+            if (onRetry != null)
+              TextButton(
+                key: const Key('retry-playback'),
+                onPressed: onRetry,
+                child: const Text('重试播放'),
+              ),
             IconButton(
               tooltip: '关闭提示',
               onPressed: onDismiss,

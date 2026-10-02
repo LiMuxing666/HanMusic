@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:han_music/app/data/models/play_mode.dart';
 import 'package:han_music/app/data/models/song.dart';
 import 'package:han_music/app/data/models/queue_add_result.dart';
 import 'package:han_music/app/data/models/sleep_timer_mode.dart';
@@ -147,6 +148,141 @@ void main() {
       await volumeController.toggleMute();
       expect(volumeController.volume.value, 0.4);
       expect(failingBackend.playCalls, 0);
+    },
+  );
+
+  test(
+    'retry playback resolves a fresh online address and preserves the reordered mixed queue',
+    () async {
+      final onlineSong = Song.online(
+        sourceId: 'retry-source',
+        trackId: 'retry-track',
+        title: '待重试歌曲',
+      );
+      final freshUri = Uri.parse('https://audio.invalid/fresh-retry.mp3');
+      var resolutions = 0;
+      final retryBackend = FakeAudioBackend();
+      final retryPlayer = PlayerService(
+        retryBackend,
+        resolver: (_) async {
+          resolutions++;
+          if (resolutions == 1) {
+            throw StateError('Temporary resolution failure');
+          }
+          return freshUri;
+        },
+      );
+      final retryTimer = TimerService(onExpired: retryPlayer.pause);
+      final retryController = PlayerController(
+        player: retryPlayer,
+        timer: retryTimer,
+        picker: _FakeSongPicker(),
+      );
+      retryController.onStart();
+      addTearDown(() async {
+        retryController.onDelete();
+        retryTimer.onClose();
+        await retryPlayer.shutdown();
+      });
+      retryPlayer.skipOnError.value = false;
+      retryPlayer.playMode.value = PlayMode.repeatAll;
+      await retryPlayer.playQueue([song, onlineSong], startIndex: 1);
+      expect(retryController.canPlay, isFalse);
+      expect(retryController.canRetryPlayback, isTrue);
+      expect(retryBackend.loadedUris, isEmpty);
+      retryController.reorderQueue(1, 0);
+      final queueIds = retryPlayer.queue.map((item) => item.id).toList();
+
+      await retryController.retryPlayback(onlineSong.id);
+      expect(resolutions, 2);
+      expect(retryBackend.loadedUris, [freshUri]);
+      expect(retryBackend.playCalls, 1);
+      expect(retryPlayer.queue.map((item) => item.id), queueIds);
+      expect(retryController.currentSong.value?.id, onlineSong.id);
+      expect(retryController.currentIndex, 0);
+      expect(retryController.playMode.value, PlayMode.repeatAll);
+      expect(retryController.skipOnError.value, isFalse);
+      expect(retryController.isPlaying.value, isTrue);
+      expect(retryController.position.value, Duration.zero);
+      expect(retryController.errorMessage.value, isNull);
+      expect(retryController.canRetryPlayback, isFalse);
+    },
+  );
+
+  test(
+    'retry playback rejects loading duplicate stale missing and lifecycle requests',
+    () async {
+      final second = song.copyWith(
+        uri: Uri.file(r'D:\music\重试后续歌曲.mp3', windows: true),
+        fileName: '重试后续歌曲.mp3',
+      );
+      player.skipOnError.value = false;
+      backend.loadFailure = StateError('Temporary native load failure');
+      await player.playQueue([song, second]);
+      expect(controller.canRetryPlayback, isTrue);
+      final initialLoads = backend.loadedUris.toList();
+      await controller.retryPlayback(second.id);
+      expect(backend.loadedUris, initialLoads);
+
+      controller.beginExit();
+      expect(controller.canRetryPlayback, isFalse);
+      await controller.retryPlayback(song.id);
+      expect(backend.loadedUris, initialLoads);
+      controller.cancelExit();
+      player.updateSongs([song.copyWith(isMissing: true)]);
+      expect(controller.canRetryPlayback, isFalse);
+      await controller.retryPlayback(song.id);
+      expect(backend.loadedUris, initialLoads);
+      player.updateSongs([song]);
+      expect(controller.canRetryPlayback, isTrue);
+
+      backend.loadFailure = null;
+      final gate = backend.loadCompleter = Completer<Duration?>();
+      final retrying = controller.retryPlayback(song.id);
+      final pending = [retrying];
+      try {
+        await _flushCallbacks();
+        expect(controller.isLoading.value, isTrue);
+        expect(controller.canRetryPlayback, isFalse);
+        var duplicateReturned = false;
+        pending.add(
+          controller.retryPlayback(song.id).then((_) {
+            duplicateReturned = true;
+          }),
+        );
+        pending.add(controller.retryPlayback(second.id));
+        await _flushCallbacks();
+        expect(duplicateReturned, isTrue);
+        expect(backend.loadedUris, [...initialLoads, song.uri]);
+        expect(backend.playCalls, 0);
+      } finally {
+        backend.loadCompleter = null;
+        gate.complete(const Duration(minutes: 3));
+        await Future.wait(pending);
+      }
+      expect(controller.isPlaying.value, isTrue);
+      expect(backend.playCalls, 1);
+
+      backend.loadFailure = StateError('Replacement track unavailable');
+      await controller.removeFromQueue(song.id);
+      expect(controller.currentSong.value?.id, second.id);
+      expect(controller.canRetryPlayback, isTrue);
+      final afterRemoval = backend.loadedUris.toList();
+      await controller.retryPlayback(song.id);
+      expect(backend.loadedUris, afterRemoval);
+      await controller.removeFromQueue(second.id);
+      expect(controller.canRetryPlayback, isFalse);
+      await controller.retryPlayback(second.id);
+      expect(backend.loadedUris, afterRemoval);
+
+      await player.playQueue([song]);
+      expect(controller.canRetryPlayback, isTrue);
+      controller.onDelete();
+      final afterClose = backend.loadedUris.toList();
+      expect(controller.canRetryPlayback, isFalse);
+      await controller.retryPlayback(song.id);
+      expect(backend.loadedUris, afterClose);
+      expect(backend.playCalls, 1);
     },
   );
 

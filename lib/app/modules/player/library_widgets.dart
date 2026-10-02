@@ -111,11 +111,17 @@ class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
                                   if (error == null || error.isEmpty) {
                                     return const SizedBox.shrink();
                                   }
+                                  final song = controller.currentSong.value;
                                   return Padding(
                                     padding: const EdgeInsets.only(bottom: 12),
                                     child: _ErrorNotice(
                                       message: error,
                                       onDismiss: controller.dismissError,
+                                      onRetry: controller.canRetryPlayback
+                                          ? () => controller.retryPlayback(
+                                              song!.id,
+                                            )
+                                          : null,
                                     ),
                                   );
                                 }),
@@ -1195,6 +1201,7 @@ class _DesktopTransport extends StatelessWidget {
       final timerMode = controller.timerMode.value;
       final timerActive = controller.timerActive;
       final volume = controller.volume.value;
+      final retry = controller.canRetryPlayback;
       final enabled = controller.canPlay && !loading;
       final queueAvailable = controller.queue.isNotEmpty && !loading;
       return Column(
@@ -1241,8 +1248,16 @@ class _DesktopTransport extends StatelessWidget {
               ),
               IconButton.filled(
                 key: const Key('toggle-playback'),
-                tooltip: playing ? '暂停' : '播放',
-                onPressed: enabled ? controller.togglePlayback : null,
+                tooltip: retry
+                    ? '重试播放'
+                    : playing
+                    ? '暂停'
+                    : '播放',
+                onPressed: retry
+                    ? () => controller.retryPlayback(song!.id)
+                    : enabled
+                    ? controller.togglePlayback
+                    : null,
                 style: IconButton.styleFrom(minimumSize: const Size.square(46)),
                 icon: loading
                     ? const SizedBox.square(
