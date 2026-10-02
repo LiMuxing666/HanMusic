@@ -2496,6 +2496,80 @@ void main() {
     );
   }
 
+  for (final withLibrary in [true, false]) {
+    testWidgets(
+      'mute restores volume without changing playback withLibrary $withLibrary',
+      (tester) async {
+        await _withPlayer(
+          tester,
+          withLibrary: withLibrary,
+          size: const Size(800, 600),
+          textScale: 2,
+          run: (fixture) async {
+            await fixture.player.open(_song);
+            await fixture.controller.setVolume(.4);
+            fixture.backend.emitPosition(const Duration(seconds: 37));
+            await tester.pumpAndSettle();
+            final mute = find.byKey(const Key('toggle-mute'));
+            final slider = find.byKey(const Key('volume-slider'));
+            final pauseCalls = fixture.backend.pauseCalls;
+            final playCalls = fixture.backend.playCalls;
+            final loadCalls = fixture.backend.loadedUris.length;
+            await tester.ensureVisible(mute);
+            await tester.pumpAndSettle();
+            expect(mute.hitTestable(), findsOneWidget);
+            expect(slider.hitTestable(), findsOneWidget);
+            expect(find.byTooltip('静音（当前音量 40%）'), findsOneWidget);
+            expect(tester.widget<Slider>(slider).value, .4);
+            expect(tester.takeException(), isNull);
+
+            await tester.tap(mute, kind: PointerDeviceKind.mouse);
+            await tester.pumpAndSettle();
+            expect(fixture.player.volume.value, 0);
+            expect(fixture.backend.volumes.last, 0);
+            expect(tester.widget<Slider>(slider).value, 0);
+            expect(find.byTooltip('恢复音量至 40%'), findsOneWidget);
+            expect(fixture.player.isPlaying.value, isTrue);
+            expect(fixture.player.currentSong.value?.id, _song.id);
+            expect(fixture.player.position.value, const Duration(seconds: 37));
+            expect(fixture.backend.pauseCalls, pauseCalls);
+
+            // Traverse from the clicked control without clearing the page's
+            // focus scope, which would not model a user's Tab key sequence.
+            await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+            await tester.pumpAndSettle();
+            for (
+              var step = 0;
+              !_primaryFocusWithin(mute) && step < 100;
+              step++
+            ) {
+              await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+              await tester.pumpAndSettle();
+            }
+            expect(_primaryFocusWithin(mute), isTrue);
+            expect(mute.hitTestable(), findsOneWidget);
+            await tester.sendKeyEvent(LogicalKeyboardKey.space);
+            await tester.pumpAndSettle();
+            expect(fixture.player.volume.value, .4);
+            expect(fixture.backend.volumes.last, .4);
+            expect(tester.widget<Slider>(slider).value, .4);
+            expect(find.byTooltip('静音（当前音量 40%）'), findsOneWidget);
+            expect(slider.hitTestable(), findsOneWidget);
+            expect(fixture.player.isPlaying.value, isTrue);
+            expect(fixture.player.currentSong.value?.id, _song.id);
+            expect(fixture.player.position.value, const Duration(seconds: 37));
+            expect(fixture.backend.pauseCalls, pauseCalls);
+            expect(fixture.backend.playCalls, playCalls);
+            expect(fixture.backend.loadedUris, hasLength(loadCalls));
+            expect(fixture.backend.seekPositions, isEmpty);
+            expect(tester.takeException(), isNull);
+          },
+        );
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+  }
+
   testWidgets('seek previews while dragging and commits only on release', (
     tester,
   ) async {

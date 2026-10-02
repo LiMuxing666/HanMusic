@@ -1318,13 +1318,7 @@ class _DesktopTransport extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 14),
-              Icon(
-                volume <= 0
-                    ? Icons.volume_off_rounded
-                    : Icons.volume_up_rounded,
-                size: 20,
-                color: _muted,
-              ),
+              _VolumeButton(controller: controller),
               SizedBox(
                 width: 100,
                 child: Slider(

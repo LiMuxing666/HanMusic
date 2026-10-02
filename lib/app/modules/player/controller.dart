@@ -49,6 +49,7 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
   final _emptyStatus = RxnString();
   bool _closed = false;
   bool _exitPending = false;
+  double _unmuteVolume = 0.7;
   int _importGeneration = 0;
   int? _activeImport;
 
@@ -73,6 +74,7 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
   Rx<Duration> get position => _player.position;
   Rx<Duration> get duration => _player.duration;
   RxDouble get volume => _player.volume;
+  double get unmuteVolume => _unmuteVolume;
   RxnString get errorMessage => _player.errorMessage;
   Rxn<Duration> get timerRemaining => _timer.remaining;
   Rx<SleepTimerMode> get timerMode => _timer.mode;
@@ -240,7 +242,19 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
 
   Future<void> togglePlayback() => _player.togglePlayback();
   Future<void> seek(Duration value) => _player.seek(value);
-  Future<void> setVolume(double value) => _player.setVolume(value);
+  Future<void> setVolume(double value) async {
+    if (_closed || _exitPending || !value.isFinite) return;
+    final current = volume.value;
+    if (current > 0) _unmuteVolume = current;
+    final target = value.clamp(0.0, 1.0);
+    await _player.setVolume(target);
+    if (!_closed && !_exitPending && target > 0 && volume.value == target) {
+      _unmuteVolume = target;
+    }
+  }
+
+  Future<void> toggleMute() => setVolume(volume.value > 0 ? 0 : _unmuteVolume);
+
   void startSleepTimer(Duration value) {
     if (!_closed) _timer.start(value);
   }

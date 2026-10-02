@@ -1,7 +1,7 @@
 name: han_music
 description: "HanMusic Windows music player."
 publish_to: 'none'
-version: 0.1.0-dev.22+22
+version: 0.1.0-dev.23+23
 
 environment:
   sdk: ^3.11.5

@@ -755,18 +755,7 @@ class _PlaybackCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 12),
-                Tooltip(
-                  message: '音量 ${(volume * 100).round()}%',
-                  child: Icon(
-                    volume <= 0
-                        ? Icons.volume_off_rounded
-                        : volume < .5
-                        ? Icons.volume_down_rounded
-                        : Icons.volume_up_rounded,
-                    size: 22,
-                    color: _muted,
-                  ),
-                ),
+                _VolumeButton(controller: controller),
                 SizedBox(
                   width: 110,
                   child: Slider(
@@ -785,6 +774,34 @@ class _PlaybackCard extends StatelessWidget {
       }),
     );
   }
+}
+
+class _VolumeButton extends StatelessWidget {
+  const _VolumeButton({required this.controller});
+
+  final PlayerController controller;
+
+  @override
+  Widget build(BuildContext context) => Obx(() {
+    final volume = controller.volume.value;
+    final muted = volume <= 0;
+    return IconButton(
+      key: const Key('toggle-mute'),
+      tooltip: muted
+          ? '恢复音量至 ${(controller.unmuteVolume * 100).round()}%'
+          : '静音（当前音量 ${(volume * 100).round()}%）',
+      onPressed: controller.toggleMute,
+      icon: Icon(
+        muted
+            ? Icons.volume_off_rounded
+            : volume < .5
+            ? Icons.volume_down_rounded
+            : Icons.volume_up_rounded,
+        size: 22,
+        color: _muted,
+      ),
+    );
+  });
 }
 
 class _ProgressSlider extends StatefulWidget {

@@ -60,6 +60,96 @@ void main() {
     expect(controller.errorMessage.value, isNull);
   });
 
+  test(
+    'mute restores audible volume and respects slider and controller lifecycle',
+    () async {
+      await player.restoreQueue([song], volume: 0);
+      expect(controller.volume.value, 0);
+      expect(controller.unmuteVolume, 0.7);
+      await controller.toggleMute();
+      expect(controller.volume.value, 0.7);
+
+      await controller.setVolume(0.4);
+      await controller.toggleMute();
+      expect(controller.volume.value, 0);
+      expect(controller.unmuteVolume, 0.4);
+      await controller.toggleMute();
+      expect(controller.volume.value, 0.4);
+
+      await controller.toggleMute();
+      await controller.setVolume(0.25);
+      expect(controller.volume.value, 0.25);
+      await controller.toggleMute();
+      expect(controller.volume.value, 0);
+      expect(controller.unmuteVolume, 0.25);
+      await controller.toggleMute();
+      expect(controller.volume.value, 0.25);
+      expect(backend.loadedUris, isEmpty);
+      expect(backend.playCalls, 0);
+
+      controller.beginExit();
+      final beforeExit = backend.volumes.toList();
+      await controller.setVolume(0.8);
+      await controller.toggleMute();
+      expect(controller.volume.value, 0.25);
+      expect(controller.unmuteVolume, 0.25);
+      expect(backend.volumes, beforeExit);
+
+      controller.cancelExit();
+      await controller.toggleMute();
+      expect(controller.volume.value, 0);
+      controller.onDelete();
+      final beforeClose = backend.volumes.toList();
+      await controller.setVolume(0.9);
+      await controller.toggleMute();
+      expect(controller.volume.value, 0);
+      expect(controller.unmuteVolume, 0.25);
+      expect(backend.volumes, beforeClose);
+    },
+  );
+
+  test(
+    'failed mute rolls back and can retry without losing audible volume',
+    () async {
+      final failingBackend = _VolumeFailureBackend();
+      final volumePlayer = PlayerService(failingBackend);
+      final volumeTimer = TimerService(onExpired: volumePlayer.pause);
+      final volumeController = PlayerController(
+        player: volumePlayer,
+        timer: volumeTimer,
+        picker: _FakeSongPicker(),
+      );
+      volumeController.onStart();
+      addTearDown(() async {
+        volumeController.onDelete();
+        volumeTimer.onClose();
+        await volumePlayer.shutdown();
+      });
+
+      await volumeController.setVolume(0.4);
+      failingBackend.failure = StateError('Native volume update failed');
+      await volumeController.toggleMute();
+      expect(volumeController.volume.value, 0.4);
+      expect(volumeController.unmuteVolume, 0.4);
+      expect(volumeController.errorMessage.value, '音量调整失败，请重试。');
+
+      failingBackend.failure = null;
+      volumeController.dismissError();
+      await volumeController.toggleMute();
+      expect(volumeController.volume.value, 0);
+      expect(volumeController.unmuteVolume, 0.4);
+      failingBackend.failure = StateError('Muted slider update failed');
+      await volumeController.setVolume(0.9);
+      expect(volumeController.volume.value, 0);
+      expect(volumeController.unmuteVolume, 0.4);
+
+      failingBackend.failure = null;
+      await volumeController.toggleMute();
+      expect(volumeController.volume.value, 0.4);
+      expect(failingBackend.playCalls, 0);
+    },
+  );
+
   test('end-of-track timer is only available for a ready valid song', () async {
     expect(controller.canStopAfterCurrentSong, isFalse);
     controller.startSleepTimerAfterCurrentSong();
@@ -515,6 +605,16 @@ void main() {
       },
     );
   });
+}
+
+class _VolumeFailureBackend extends FakeAudioBackend {
+  Object? failure;
+
+  @override
+  Future<void> setVolume(double volume) async {
+    volumes.add(volume);
+    if (failure case final error?) throw error;
+  }
 }
 
 class _FakeLibrary extends LibraryService {
