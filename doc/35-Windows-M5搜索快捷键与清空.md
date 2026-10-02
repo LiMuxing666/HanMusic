@@ -1,6 +1,6 @@
 # Windows M5 搜索快捷键与清空（dev.19）
 
-日期：2026-10-02。版本：`0.1.0-dev.19+19`。本轮补齐本地与在线搜索的键鼠交互，M5 仍在进行中。
+日期：2026-10-02。版本：`0.1.0-dev.19+19`。代码提交：`a89f5dfefa7df8750b8de8e5ba404acc1931da23`。本轮补齐本地与在线搜索的键鼠交互，M5 仍在进行中。
 
 ## 本轮改动
 
@@ -14,7 +14,9 @@
 - 两项原有键盘翻页场景通过，分别为 1280×720 / 100% 字号和 800×600 / 200% 字号；共 **4/4**，未运行全量回归或性能采集。
 - 改动文件定向 `dart analyze` 无问题，格式检查通过。初轮发现失焦后 Ctrl+F 无响应，调整主页面焦点作用域后复跑通过；本地场景另外修正了主动取消整个初始 scope 焦点的测试操作，分别验证启动时 Ctrl+F 和输入框失焦后的 Ctrl+F。
 
-完整开发预览包信息将在本轮构建完成后补入。
+Windows 正常 `lib/main.dart` Release 构建通过。完整 ZIP：`D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-dev.19-M5.zip`，20,989,550 字节，SHA-256：`6fcfcb93ed19bf59a9fda9f4ace6a848ac531513646ddcf9c877b9f79275849b`。`BUILD-MANIFEST.json` 记录 `version=0.1.0-dev.19+19`、上述源码提交、`gitDirty=false`、`publicReleaseReady=false`，清单为 35 项。包内 README 已包含对应版本及搜索快捷键说明。
+
+开发机完整包检查 **6/6 通过**：ZIP SHA、文件清单、x64 运行库、系统 PowerShell 启动器 8 秒响应、运行中持有数据目录锁以及进程停止后释放锁。记录：`D:\dev\tmp\hanmusic-m5-package-verification\验收 包 20261002-202536-430-4d3a1e9d\verification.json`。该检查没有执行 GUI 交互、实际播放、正常关窗或干净机验收。使用方式见[预览说明](./12-Windows预览运行与验收.md)。
 
 ## 验收边界
 
