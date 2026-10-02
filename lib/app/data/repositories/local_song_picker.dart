@@ -4,6 +4,8 @@ import 'package:file_picker/file_picker.dart';
 
 import '../models/song.dart';
 
+const _windowsPickerOptions = WindowsOptions(lockParentWindow: true);
+
 abstract interface class SongPicker {
   Future<Song?> pick();
 }
@@ -18,6 +20,7 @@ class LocalLibraryPicker implements LibraryPicker {
   Future<List<String>> pickFiles() async {
     final files = await FilePicker.pickFiles(
       dialogTitle: '导入音乐文件',
+      windowsOptions: _windowsPickerOptions,
       type: FileType.custom,
       allowedExtensions: [
         'mp3',
@@ -36,14 +39,17 @@ class LocalLibraryPicker implements LibraryPicker {
   }
 
   @override
-  Future<String?> pickDirectory() =>
-      FilePicker.getDirectoryPath(dialogTitle: '导入音乐文件夹（包含子文件夹）');
+  Future<String?> pickDirectory() => FilePicker.getDirectoryPath(
+    dialogTitle: '导入音乐文件夹（包含子文件夹）',
+    windowsOptions: _windowsPickerOptions,
+  );
 }
 
 class LocalSongPicker implements SongPicker {
   @override
   Future<Song?> pick() async {
     final file = await FilePicker.pickFile(
+      windowsOptions: _windowsPickerOptions,
       type: FileType.custom,
       allowedExtensions: ['mp3', 'flac', 'wav', 'm4a', 'ogg', 'aac'],
     );
