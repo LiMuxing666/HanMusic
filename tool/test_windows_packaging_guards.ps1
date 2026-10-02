@@ -96,4 +96,44 @@ foreach ($case in $runtimeCases) {
         throw "Incorrect runtime requirements: $($case.Name)"
     }
 }
-Write-Output '15 packaging guard checks passed; external marker, existing preview and build executable preserved.'
+
+# Inspect the README path without invoking Flutter or writing a preview package.
+$guideFixture = Join-Path $scratch ('readme-fixture-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path (Join-Path $guideFixture 'build'),(Join-Path $guideFixture 'doc') -Force | Out-Null
+$auditSource = @(Get-ChildItem -LiteralPath (Join-Path $project 'doc') -Filter '11-Windows*.md' -File)
+$guideSource = @(Get-ChildItem -LiteralPath (Join-Path $project 'doc') -Filter '12-Windows*.md' -File)
+if ($auditSource.Count -ne 1 -or $guideSource.Count -ne 1) { throw 'Expected one audit and one preview guide fixture.' }
+Copy-Item -LiteralPath $auditSource[0].FullName -Destination (Join-Path $guideFixture 'doc')
+Copy-Item -LiteralPath $guideSource[0].FullName -Destination (Join-Path $guideFixture 'doc')
+Copy-Item -LiteralPath (Join-Path $project 'pubspec.lock') -Destination $guideFixture
+$futureVersion = '0.1.0-dev.99+99'
+[IO.File]::WriteAllText((Join-Path $guideFixture 'pubspec.yaml'), "version: $futureVersion`n")
+$guidePath = (Get-ChildItem -LiteralPath (Join-Path $guideFixture 'doc') -Filter '12-Windows*.md' -File).FullName
+$originalGuide = [IO.File]::ReadAllText($guidePath)
+$inspection = (& $packager -ProjectDirectory $guideFixture -OutputRoot $scratch -PackageName 'readme-inspection' -ValidateDocumentationOnly) | ConvertFrom-Json
+if ($inspection.version -cne $futureVersion -or
+    $inspection.readme -cnotmatch [regex]::Escape("**$futureVersion**") -or
+    $inspection.readme.Contains('<!-- HANMUSIC_PACKAGE_VERSION -->') -or
+    $inspection.readme -match '\]\((?!https?://|#)[^)]*\)' -or
+    $inspection.audit -match '\]\(\./' -or
+    $inspection.audit -notmatch 'https://github.com/LiMuxing666/HanMusic/blob/Windows_lmx/doc/21-') {
+    throw 'Packaged documentation did not render the current version with safe links.'
+}
+[IO.File]::WriteAllText($guidePath, $originalGuide + "`n[missing](./missing.md)`n")
+$rejected = $false
+try { & $packager -ProjectDirectory $guideFixture -OutputRoot $scratch -PackageName 'readme-inspection' -ValidateDocumentationOnly | Out-Null }
+catch { if ($_.Exception.Message -notlike '*relative Markdown link*') { throw }; $rejected = $true }
+if (-not $rejected) { throw 'A broken relative README link was accepted.' }
+[IO.File]::WriteAllText($guidePath, $originalGuide.Replace('<!-- HANMUSIC_PACKAGE_VERSION -->', '<!-- missing-version-marker -->'))
+$rejected = $false
+try { & $packager -ProjectDirectory $guideFixture -OutputRoot $scratch -PackageName 'readme-inspection' -ValidateDocumentationOnly | Out-Null }
+catch { if ($_.Exception.Message -notlike '*version insertion marker*') { throw }; $rejected = $true }
+if (-not $rejected) { throw 'A README without the version insertion marker was accepted.' }
+$auditPath = (Get-ChildItem -LiteralPath (Join-Path $guideFixture 'doc') -Filter '11-Windows*.md' -File).FullName
+[IO.File]::AppendAllText($auditPath, "`n[missing](./missing.md)`n")
+[IO.File]::WriteAllText($guidePath, $originalGuide)
+$rejected = $false
+try { & $packager -ProjectDirectory $guideFixture -OutputRoot $scratch -PackageName 'readme-inspection' -ValidateDocumentationOnly | Out-Null }
+catch { if ($_.Exception.Message -notlike '*unshipped repository-local link*') { throw }; $rejected = $true }
+if (-not $rejected) { throw 'An unshipped audit link was accepted.' }
+Write-Output '19 packaging guard checks passed; README version and links, audit links, external marker, existing preview and build executable preserved.'

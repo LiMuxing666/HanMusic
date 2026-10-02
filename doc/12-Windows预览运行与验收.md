@@ -1,6 +1,8 @@
 # HanMusic Windows 开发预览：运行与手工验收
 
-本包为 Windows x64 **0.1.0-dev.16+16 开发预览**，不是已完成发行验收的 v0.1。包含完整 Flutter Release 目录、启动器、文件校验清单及依赖说明；没有安装器、数字签名或自动更新。
+Windows x64 开发预览版本：<!-- HANMUSIC_PACKAGE_VERSION -->以包内 BUILD-MANIFEST.json 为准。
+
+本包为 Windows x64 **开发预览**，不是已完成发行验收的 v0.1。打包时会在文首写入该次构建的版本。包含完整 Flutter Release 目录、启动器、文件校验清单及依赖说明；没有安装器、数字签名或自动更新。
 
 ## 运行
 
@@ -80,7 +82,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-HanMusic.ps1 -Da
 | 干净机器 | 使用未安装 Flutter/Visual Studio/JDK 的 Windows x64 系统解压；按缺失情况仅安装官方 VC 运行库 | 可启动、本地/网络播放、定时、正常退出和恢复；记录所有额外运行条件 |
 | 包完整性 | 解压后核对所有清单文件；复制到中文/空格目录再启动 | 校验一致，启动器和本地数据路径正常 |
 
-干净 Windows x64 的逐项执行步骤和结果记录见 [dev.16 干净机验收交接](./30-Windows-M5干净机验收交接.md)；目前尚未执行，开发机包检查不能代替它。
+干净 Windows x64 的逐项执行步骤和结果记录参考仓库中的 [dev.16 干净机验收交接](https://github.com/LiMuxing666/HanMusic/blob/Windows_lmx/doc/30-Windows-M5干净机验收交接.md)；该记录目前尚未执行，新预览包须记录自己的版本和 SHA-256。开发机包检查不能代替干净机验收。
 
 对外发行前还须解决原生依赖对应源码/完整通知、项目本身的授权决定、真实音频输出起播测量及性能门槛。此预览包不作为完成这些条件的证明。
 

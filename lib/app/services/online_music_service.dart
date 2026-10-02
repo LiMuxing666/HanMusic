@@ -8,6 +8,8 @@ import '../data/models/song.dart';
 import '../data/repositories/online_music_repository.dart';
 import '../data/repositories/online_source_store.dart';
 
+enum _SearchRetryKind { firstPage, nextPage }
+
 class OnlineMusicService extends GetxService {
   OnlineMusicService({
     required OnlineMusicRepository repository,
@@ -36,6 +38,7 @@ class OnlineMusicService extends GetxService {
   int _contextSerial = 0;
   int? _nextPage;
   String _searchedQuery = '';
+  _SearchRetryKind? _searchRetryKind;
   bool _closed = false;
   bool _exitPending = false;
   Future<void> _mutations = Future.value();
@@ -56,6 +59,24 @@ class OnlineMusicService extends GetxService {
   }
 
   OnlineSourceConfig? get selectedSource => _source(selectedSourceId.value);
+
+  /// Only a failed search request can be retried through [retrySearchError].
+  bool get hasRetryableSearchError =>
+      _searchRetryKind != null && errorMessage.value != null;
+
+  Future<void> retrySearchError() {
+    if (!hasRetryableSearchError) return Future.value();
+    return switch (_searchRetryKind!) {
+      _SearchRetryKind.firstPage => searchNow(),
+      _SearchRetryKind.nextPage => loadMore(),
+    };
+  }
+
+  void _setNonSearchError(String? message) {
+    _searchRetryKind = null;
+    errorMessage.value = message;
+  }
+
   OnlineSourceConfig? _source(String? id) {
     for (final source in sources) {
       if (source.id == id) return source;
@@ -72,7 +93,7 @@ class OnlineMusicService extends GetxService {
       selectedSourceId.value = snapshot.selectedSourceId;
       statusMessage.value = _store.warning;
     } catch (_) {
-      if (!_closed) errorMessage.value = '读取网络源配置失败，请检查磁盘与权限。';
+      if (!_closed) _setNonSearchError('读取网络源配置失败，请检查磁盘与权限。');
     }
   }
 
@@ -82,7 +103,7 @@ class OnlineMusicService extends GetxService {
     return _serialize(() async {
       if (_closed) return false;
       if (id != null && _source(id) == null) {
-        errorMessage.value = '所选网络源不存在，请重新选择。';
+        _setNonSearchError('所选网络源不存在，请重新选择。');
         return false;
       }
       try {
@@ -91,11 +112,11 @@ class OnlineMusicService extends GetxService {
         );
         _invalidateCommittedContext();
         selectedSourceId.value = id;
-        errorMessage.value = null;
+        _setNonSearchError(null);
         statusMessage.value = id == null ? '已取消选择网络源。' : '已选择网络源。';
         return true;
       } catch (_) {
-        errorMessage.value = '保存网络源选择失败，已保留原选择。';
+        _setNonSearchError('保存网络源选择失败，已保留原选择。');
         return false;
       }
     }).then<void>((_) {});
@@ -118,11 +139,11 @@ class OnlineMusicService extends GetxService {
         _invalidateCommittedContext(sourceId: id);
         sources.assignAll(remaining);
         selectedSourceId.value = selected;
-        errorMessage.value = null;
+        _setNonSearchError(null);
         statusMessage.value = '已删除网络源；播放队列中的歌曲会保留并提示源不可用。';
         return true;
       } catch (_) {
-        errorMessage.value = '删除网络源失败，已保留原配置。';
+        _setNonSearchError('删除网络源失败，已保留原配置。');
         return false;
       }
     }).then<void>((_) {});
@@ -140,7 +161,7 @@ class OnlineMusicService extends GetxService {
     return _serialize(() async {
       if (_closed || context != _contextSerial) return false;
       if (sources.length >= 100 && _source(config.id) == null) {
-        errorMessage.value = '最多可保存 100 个网络源。';
+        _setNonSearchError('最多可保存 100 个网络源。');
         return false;
       }
       if (!await testConfig(config, query: testQuery) ||
@@ -164,11 +185,11 @@ class OnlineMusicService extends GetxService {
         _invalidateCommittedContext(sourceId: config.id);
         sources.assignAll(updated);
         selectedSourceId.value = selected;
-        errorMessage.value = null;
+        _setNonSearchError(null);
         statusMessage.value = '网络源已保存。${connectionStatus ?? ''}';
         return true;
       } catch (_) {
-        errorMessage.value = '保存网络源失败，已保留原配置，请检查磁盘与权限。';
+        _setNonSearchError('保存网络源失败，已保留原配置，请检查磁盘与权限。');
         return false;
       }
     });
@@ -177,7 +198,7 @@ class OnlineMusicService extends GetxService {
   Future<bool> testConnection(String id, {String query = 'test'}) async {
     final source = _source(id);
     if (source == null) {
-      errorMessage.value = '网络源不存在，请重新选择。';
+      _setNonSearchError('网络源不存在，请重新选择。');
       return false;
     }
     return testConfig(source, query: query);
@@ -193,7 +214,7 @@ class OnlineMusicService extends GetxService {
     final context = _contextSerial;
     final cancellation = _testCancellation = OnlineRequestCancellation();
     isTesting.value = true;
-    errorMessage.value = null;
+    _setNonSearchError(null);
     statusMessage.value = '正在测试网络源…';
     bool current() =>
         !_closed && serial == _testSerial && context == _contextSerial;
@@ -220,7 +241,7 @@ class OnlineMusicService extends GetxService {
           : '连接成功，搜索和播放地址映射均有效。';
       return true;
     } catch (error) {
-      if (current()) errorMessage.value = _safeError(error);
+      if (current()) _setNonSearchError(_safeError(error));
       return false;
     } finally {
       if (current()) {
@@ -254,10 +275,15 @@ class OnlineMusicService extends GetxService {
       errorMessage.value = '请先配置并选择网络源。';
       return;
     }
+    try {
+      _validateQuery(keyword);
+    } catch (error) {
+      errorMessage.value = _safeError(error);
+      return;
+    }
     final cancellation = _searchCancellation = OnlineRequestCancellation();
     isSearching.value = true;
     try {
-      _validateQuery(keyword);
       final page = await _repository.search(
         source,
         keyword,
@@ -275,6 +301,7 @@ class OnlineMusicService extends GetxService {
                 '${page.skippedItems > 0 ? '，跳过 ${page.skippedItems} 条无效记录' : ''}。';
     } catch (error) {
       if (!_closed && serial == _searchSerial) {
+        _searchRetryKind = _SearchRetryKind.firstPage;
         errorMessage.value = _safeError(error);
       }
     } finally {
@@ -298,6 +325,7 @@ class OnlineMusicService extends GetxService {
     final serial = _searchSerial;
     final cancellation = _searchCancellation = OnlineRequestCancellation();
     isLoadingMore.value = true;
+    _searchRetryKind = null;
     errorMessage.value = null;
     try {
       final page = await _repository.search(
@@ -316,6 +344,7 @@ class OnlineMusicService extends GetxService {
       statusMessage.value = '已加载 ${results.length} 首歌曲。';
     } catch (error) {
       if (!_closed && serial == _searchSerial) {
+        _searchRetryKind = _SearchRetryKind.nextPage;
         errorMessage.value = _safeError(error);
       }
     } finally {
@@ -375,6 +404,7 @@ class OnlineMusicService extends GetxService {
     isLoadingMore.value = false;
     _nextPage = null;
     _searchedQuery = '';
+    _searchRetryKind = null;
   }
 
   void _invalidateContext({String? sourceId}) {

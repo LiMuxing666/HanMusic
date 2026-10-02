@@ -89,6 +89,86 @@ void main() {
     expect(repository.queries.length, 3);
   });
 
+  test(
+    'retry of a failed later page preserves results and requests that page',
+    () async {
+      final pages = <int>[];
+      var failNextPage = true;
+      repository.onSearch = (_, _, page) async {
+        pages.add(page);
+        if (page == 1 && failNextPage) {
+          failNextPage = false;
+          throw const OnlineMusicException('第二页超时');
+        }
+        return OnlineSearchPage(
+          songs: [onlineSong('page-$page')],
+          hasMore: page == 0,
+        );
+      };
+
+      await service.searchNow('music');
+      await service.loadMore();
+      expect(service.errorMessage.value, '第二页超时');
+      expect(service.hasRetryableSearchError, isTrue);
+      expect(service.results.map((song) => song.trackId), ['page-0']);
+
+      await service.retrySearchError();
+      expect(pages, [0, 1, 1]);
+      expect(service.results.map((song) => song.trackId), ['page-0', 'page-1']);
+      expect(service.errorMessage.value, isNull);
+      expect(service.hasRetryableSearchError, isFalse);
+    },
+  );
+
+  test('retry of a failed first page searches the first page again', () async {
+    final pages = <int>[];
+    var failFirstPage = true;
+    repository.onSearch = (_, _, page) async {
+      pages.add(page);
+      if (failFirstPage) {
+        failFirstPage = false;
+        throw const OnlineMusicException('搜索超时');
+      }
+      return OnlineSearchPage(songs: [onlineSong('found')], hasMore: false);
+    };
+
+    await service.searchNow('music');
+    expect(service.hasRetryableSearchError, isTrue);
+    await service.retrySearchError();
+    expect(pages, [0, 0]);
+    expect(service.results.single.trackId, 'found');
+    expect(service.hasRetryableSearchError, isFalse);
+  });
+
+  test(
+    'query, source, and connection errors invalidate search retry',
+    () async {
+      var requests = 0;
+      repository.onSearch = (_, _, _) async {
+        requests++;
+        throw const OnlineMusicException('连接超时');
+      };
+
+      await service.searchNow('music');
+      expect(service.hasRetryableSearchError, isTrue);
+      service.setQuery('');
+      expect(service.hasRetryableSearchError, isFalse);
+      await service.retrySearchError();
+      expect(requests, 1);
+
+      await service.searchNow('music');
+      expect(service.hasRetryableSearchError, isTrue);
+      await service.selectSource('other');
+      expect(service.hasRetryableSearchError, isFalse);
+
+      expect(await service.testConnection('other'), isFalse);
+      expect(service.errorMessage.value, '连接超时');
+      expect(service.hasRetryableSearchError, isFalse);
+      await service.retrySearchError();
+      expect(requests, 3);
+    },
+  );
+
   test('draft connection test checks playback and does not save', () async {
     repository.onSearch = (config, _, _) async => OnlineSearchPage(
       songs: [onlineSong('one', sourceId: config.id)],

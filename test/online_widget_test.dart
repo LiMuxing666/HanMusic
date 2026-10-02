@@ -516,6 +516,51 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'pagination retry requests the failed page without clearing results',
+    (tester) async {
+      await _withOnline(
+        tester,
+        run: (fixture) async {
+          fixture.repository.hasMore = true;
+          await tester.enterText(find.byKey(const Key('online-query')), '夏天');
+          await tester.pump(const Duration(milliseconds: 500));
+          await tester.pumpAndSettle();
+          final firstSong = fixture.online.results.single;
+          final more = find.byKey(const Key('online-load-more'));
+          await tester.ensureVisible(more);
+          await tester.pumpAndSettle();
+
+          fixture.repository.failure = '第二页暂时不可用';
+          await tester.tap(more);
+          await tester.pumpAndSettle();
+          expect(fixture.online.results.single.id, firstSong.id);
+          expect(fixture.repository.requests.map((request) => request.page), [
+            1,
+            2,
+          ]);
+          final retry = find.byKey(const Key('online-error-retry'));
+          await tester.ensureVisible(retry);
+          await tester.pumpAndSettle();
+          expect(retry.hitTestable(), findsOneWidget);
+
+          fixture.repository.failure = null;
+          await tester.tap(retry);
+          await tester.pumpAndSettle();
+          expect(fixture.repository.requests.map((request) => request.page), [
+            1,
+            2,
+            2,
+          ]);
+          expect(fixture.online.results, hasLength(2));
+          expect(fixture.online.results.first.id, firstSong.id);
+          expect(find.text('第二页暂时不可用'), findsNothing);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+  );
 }
 
 final _play = find.byKey(const Key('toggle-playback'));

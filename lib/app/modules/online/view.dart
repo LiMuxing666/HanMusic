@@ -199,12 +199,12 @@ class OnlineMusicPage extends StatelessWidget {
                   ),
                 ),
               ),
-              TextButton(
-                onPressed: controller.service.selectedSource == null
-                    ? null
-                    : controller.searchNow,
-                child: const Text('重试'),
-              ),
+              if (controller.service.hasRetryableSearchError)
+                TextButton(
+                  key: const Key('online-error-retry'),
+                  onPressed: controller.retrySearchError,
+                  child: const Text('重试'),
+                ),
             ],
           ),
         );

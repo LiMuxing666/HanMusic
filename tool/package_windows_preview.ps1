@@ -2,7 +2,8 @@
 param(
     [string]$ProjectDirectory = (Split-Path -Parent $PSScriptRoot),
     [string]$OutputRoot = 'D:\dev\releases\HanMusic',
-    [string]$PackageName = ('HanMusic-Windows-x64-M5-preview-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    [string]$PackageName = ('HanMusic-Windows-x64-M5-preview-' + (Get-Date -Format 'yyyyMMdd-HHmmss')),
+    [switch]$ValidateDocumentationOnly
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -43,8 +44,36 @@ if ($auditFiles.Count -ne 1 -or $guideFiles.Count -ne 1) { throw 'Expected exact
 $audit = $auditFiles[0].FullName
 $guide = $guideFiles[0].FullName
 foreach ($required in @($audit, $guide, (Join-Path $project 'pubspec.lock'),
-        (Join-Path $PSScriptRoot 'windows_runtime_check.ps1'))) {
+        (Join-Path $project 'pubspec.yaml'), (Join-Path $PSScriptRoot 'windows_runtime_check.ps1'))) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing packaging input: $required" }
+}
+$versionLines = @(Select-String -LiteralPath (Join-Path $project 'pubspec.yaml') -Pattern '^version:\s*([^\s#]+)\s*(?:#.*)?$')
+if ($versionLines.Count -ne 1) { throw 'Expected exactly one pubspec version.' }
+$version = $versionLines[0].Matches[0].Groups[1].Value
+$guideText = [IO.File]::ReadAllText($guide)
+$guideMarker = '<!-- HANMUSIC_PACKAGE_VERSION -->'
+if ($guideText.IndexOf($guideMarker, [StringComparison]::Ordinal) -lt 0 -or
+    $guideText.IndexOf($guideMarker, [StringComparison]::Ordinal) -ne
+    $guideText.LastIndexOf($guideMarker, [StringComparison]::Ordinal)) {
+    throw 'Preview guide must contain exactly one version insertion marker.'
+}
+$guideVersionLine = [regex]::Match($guideText, '(?m)^[^\r\n]*' + [regex]::Escape($guideMarker) + '[^\r\n]*$')
+if (-not $guideVersionLine.Success) { throw 'Preview guide version marker must be on one line.' }
+$versionPrefix = $guideVersionLine.Value.Substring(0,
+    $guideVersionLine.Value.IndexOf($guideMarker, [StringComparison]::Ordinal))
+$previewReadme = $guideText.Substring(0, $guideVersionLine.Index) + $versionPrefix + "**$version**" +
+    $guideText.Substring($guideVersionLine.Index + $guideVersionLine.Length)
+if ([regex]::IsMatch($previewReadme, '\]\((?!https?://|#)[^)]*\)', 'IgnoreCase')) {
+    throw 'Preview guide contains a relative Markdown link; use a packaged target or repository URL.'
+}
+$auditText = [IO.File]::ReadAllText($audit).Replace('](./21-',
+    '](https://github.com/LiMuxing666/HanMusic/blob/Windows_lmx/doc/21-')
+if ([regex]::IsMatch($auditText, '\]\(\./[^)]*\)')) {
+    throw 'Distribution audit contains an unshipped repository-local link.'
+}
+if ($ValidateDocumentationOnly) {
+    [ordered]@{version=$version; readme=$previewReadme; audit=$auditText} | ConvertTo-Json -Depth 2
+    return
 }
 $licenseDirectory = Join-Path $project 'doc\licenses'
 $physicalLicenseDirectory = (Get-HanMusicPhysicalPath $licenseDirectory).TrimEnd('\')
@@ -94,8 +123,8 @@ try {
     Copy-Item -LiteralPath $release -Destination $stage -Recurse
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'windows_runtime_check.ps1') -Destination (Join-Path $stage 'Check-Runtime.ps1')
     [IO.File]::WriteAllText((Join-Path $stage 'RUNTIME-REQUIREMENTS.json'), ($runtimeRequirements | ConvertTo-Json -Depth 4), $utf8)
-    Copy-Item -LiteralPath $guide -Destination (Join-Path $stage 'README.md')
-    Copy-Item -LiteralPath $audit -Destination (Join-Path $stage 'DISTRIBUTION-AUDIT.md')
+    [IO.File]::WriteAllText((Join-Path $stage 'README.md'), $previewReadme, $utf8)
+    [IO.File]::WriteAllText((Join-Path $stage 'DISTRIBUTION-AUDIT.md'), $auditText, $utf8)
     Copy-Item -LiteralPath (Join-Path $project 'pubspec.lock') -Destination (Join-Path $stage 'DEPENDENCIES.lock')
     if (Test-Path -LiteralPath $licenseDirectory) {
         Copy-Item -LiteralPath $licenseDirectory -Destination (Join-Path $stage 'licenses') -Recurse
@@ -104,6 +133,21 @@ try {
             $originalLink = '../' + [IO.Path]::GetFileName($audit)
             $licenseIndexText = [IO.File]::ReadAllText($licenseIndex).Replace($originalLink, '../DISTRIBUTION-AUDIT.md')
             [IO.File]::WriteAllText($licenseIndex, $licenseIndexText, $utf8)
+        }
+    }
+
+    # Resolve package-local Markdown references after the final file layout is known.
+    $stagePrefix = [IO.Path]::GetFullPath($stage).TrimEnd('\') + '\'
+    foreach ($relativeDoc in @('README.md','DISTRIBUTION-AUDIT.md','licenses\README.md')) {
+        $docPath = Join-Path $stage $relativeDoc
+        foreach ($link in [regex]::Matches([IO.File]::ReadAllText($docPath), '\]\(([^)]+)\)')) {
+            $target = $link.Groups[1].Value.Split('#')[0]
+            if (-not $target -or $target -match '^[a-z][a-z0-9+.-]*:') { continue }
+            $resolved = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $docPath) $target.Replace('/', '\')))
+            if (-not $resolved.StartsWith($stagePrefix, [StringComparison]::OrdinalIgnoreCase) -or
+                -not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
+                throw "Packaged Markdown link target is missing or outside the package: $relativeDoc -> $target"
+            }
         }
     }
 
@@ -153,7 +197,6 @@ Launch with Start-HanMusic.cmd to store data in the adjacent UserData folder.
     $commit = (& git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'Unable to identify source revision.' }
     $dirty = @(& git status --porcelain).Count -gt 0
-    $version = ((Select-String -LiteralPath (Join-Path $project 'pubspec.yaml') -Pattern '^version:').Line -replace '^version:\s*','').Trim()
     $inventory = @(Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
         [ordered]@{path=$_.FullName.Substring($stage.Length + 1).Replace('\','/'); bytes=$_.Length;
             sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}

@@ -25,6 +25,7 @@ class OnlineMusicController extends GetxController {
   void setQuery(String query) => service.setQuery(query);
   Future<void> searchNow() => service.searchNow();
   Future<void> loadMore() => service.loadMore();
+  Future<void> retrySearchError() => service.retrySearchError();
   Future<void> selectSource(String? id) => service.selectSource(id);
 
   Future<void> play(Song song) async {
