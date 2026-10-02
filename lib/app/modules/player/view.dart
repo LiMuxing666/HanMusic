@@ -16,15 +16,61 @@ part 'library_widgets.dart';
 const _muted = Color(0xFF738077);
 const _green = Color(0xFF256747);
 
+/// Counts row element lifecycle events in an explicitly instrumented PlayerPage.
+/// This does not count Text or RenderParagraph allocations.
+class LibraryRowLifecycleDiagnostics {
+  int _wideRowMounts = 0;
+  int _narrowRowMounts = 0;
+  int _wideRowDisposes = 0;
+  int _narrowRowDisposes = 0;
+  int _wideRowBuilds = 0;
+  int _narrowRowBuilds = 0;
+
+  void _mount(bool wide) {
+    if (wide) {
+      _wideRowMounts++;
+    } else {
+      _narrowRowMounts++;
+    }
+  }
+
+  void _dispose(bool wide) {
+    if (wide) {
+      _wideRowDisposes++;
+    } else {
+      _narrowRowDisposes++;
+    }
+  }
+
+  void _build(bool wide) {
+    if (wide) {
+      _wideRowBuilds++;
+    } else {
+      _narrowRowBuilds++;
+    }
+  }
+
+  Map<String, int> snapshot() => {
+    'wideMounts': _wideRowMounts,
+    'narrowMounts': _narrowRowMounts,
+    'wideDisposes': _wideRowDisposes,
+    'narrowDisposes': _narrowRowDisposes,
+    'wideBuilds': _wideRowBuilds,
+    'narrowBuilds': _narrowRowBuilds,
+  };
+}
+
 class PlayerPage extends StatelessWidget {
   const PlayerPage({
     super.key,
     required this.controller,
     this.libraryScrollController,
+    this.libraryRowDiagnostics,
   });
 
   final PlayerController controller;
   final ScrollController? libraryScrollController;
+  final LibraryRowLifecycleDiagnostics? libraryRowDiagnostics;
 
   @override
   Widget build(BuildContext context) {
@@ -32,6 +78,7 @@ class PlayerPage extends StatelessWidget {
       return _LibraryPlayerPage(
         controller: controller,
         libraryScrollController: libraryScrollController,
+        libraryRowDiagnostics: libraryRowDiagnostics,
       );
     }
     return Scaffold(

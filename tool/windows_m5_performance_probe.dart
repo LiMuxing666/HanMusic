@@ -22,6 +22,12 @@ import 'package:han_music/app/services/library_service.dart';
 import 'package:han_music/app/services/player_service.dart';
 import 'package:han_music/app/services/timer_service.dart';
 
+// Adds row Element lifecycle counters only to a separate diagnostic build.
+// The wrapper changes the measured widget tree, so this run is not an FPS test.
+const _rowLifecycleDiagnostic = bool.fromEnvironment(
+  'HANMUSIC_M5_ROW_LIFECYCLE_DIAGNOSTIC',
+);
+
 final class _FileTime extends ffi.Struct {
   @ffi.Uint32()
   external int low;
@@ -254,8 +260,13 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
   final _lifecycle = <String>[];
   final _accessibilityChanges = <Map<String, Object?>>[];
   final _uiThreadCpuClock = _UiThreadCpuClock();
+  final LibraryRowLifecycleDiagnostics? _rowLifecycle = _rowLifecycleDiagnostic
+      ? LibraryRowLifecycleDiagnostics()
+      : null;
   _UiThreadCpuSnapshot? _uiCpuStart;
   _UiThreadCpuSnapshot? _uiCpuEnd;
+  Map<String, int>? _rowStart;
+  Map<String, int>? _rowEnd;
   late final Map<String, Object?> _initialAccessibility;
   Map<String, Object?>? _measurementStartAccessibility;
   Map<String, Object?>? _measurementEndAccessibility;
@@ -335,6 +346,7 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
       final startRawTimestampUs = _startUs!;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_finished) return;
+        _rowStart = _rowLifecycle?.snapshot();
         try {
           _uiCpuStart = _uiThreadCpuClock.read(
             startRawTimestampUs,
@@ -363,6 +375,7 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
       _ticker.stop();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_finished) return;
+        _rowEnd = _rowLifecycle?.snapshot();
         try {
           _uiCpuEnd = _uiThreadCpuClock.read(endRawTimestampUs, _scrollTicks);
         } catch (error) {
@@ -508,7 +521,7 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
         kernel100ns >= 0 &&
         // Allow for timer resolution and native call boundary uncertainty.
         (user100ns + kernel100ns) / 10 <= wallUs + 100000;
-    if (!valid) {
+    if (!valid && !_rowLifecycleDiagnostic) {
       widget.errors.add(
         'UI thread CPU identity, nearby window or counter validation failed.',
       );
@@ -542,6 +555,44 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
     };
   }
 
+  Map<String, Object?> _summarizeRowLifecycle() {
+    if (!_rowLifecycleDiagnostic) return {'enabled': false};
+    final start = _rowStart;
+    final end = _rowEnd;
+    if (start == null || end == null) {
+      widget.errors.add('Row lifecycle boundary snapshot is missing.');
+      return {'enabled': true, 'valid': false};
+    }
+    final difference = <String, int>{};
+    for (final entry in end.entries) {
+      final previous = start[entry.key];
+      if (previous == null || entry.value < previous) {
+        widget.errors.add('Row lifecycle counter regressed: ${entry.key}.');
+        return {'enabled': true, 'valid': false};
+      }
+      difference[entry.key] = entry.value - previous;
+    }
+    final wide = difference['wideMounts'] ?? 0;
+    final narrow = difference['narrowMounts'] ?? 0;
+    final wideBuilds = difference['wideBuilds'] ?? 0;
+    final narrowBuilds = difference['narrowBuilds'] ?? 0;
+    return {
+      'enabled': true,
+      'valid': true,
+      'performanceComparable': false,
+      'method':
+          'Transparent StatefulWidget wrapper around each library row in this diagnostic build; initState and dispose count row Element lifecycle.',
+      'start': start,
+      'end': end,
+      'delta': difference,
+      'expectedTextWidgetsOnMountedRows': wide * 5 + narrow * 3,
+      'expectedTextWidgetConstructionsInRowBuilds':
+          wideBuilds * 5 + narrowBuilds * 3,
+      'limitations':
+          'Five Text widgets per wide row and three per narrow row are static code counts, not measured RenderParagraph allocations. Row builds and lifecycle counts do not attribute frame CPU time.',
+    };
+  }
+
   Future<void> _finish() async {
     if (_finished) return;
     _finished = true;
@@ -569,11 +620,13 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
         ? 0.0
         : (_lastElapsed - _measurementStartedAt!).inMicroseconds / 1000000;
     final uiThreadCpu = _summarizeUiThreadCpu();
+    final rowLifecycle = _summarizeRowLifecycle();
     _uiThreadCpuClock.dispose();
     final completed =
         _endUs != null &&
         _timings.isNotEmpty &&
-        uiThreadCpu['valid'] == true &&
+        (_rowLifecycleDiagnostic || uiThreadCpu['valid'] == true) &&
+        (!_rowLifecycleDiagnostic || rowLifecycle['valid'] == true) &&
         widget.errors.isEmpty &&
         _metricsChanges == 0 &&
         _accessibilityChanges.isEmpty;
@@ -582,6 +635,7 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
       'completed': completed,
       'startedAtUtc': _startedAt.toIso8601String(),
       'buildMode': 'profile',
+      'rowLifecycleDiagnostic': rowLifecycle,
       'scope':
           'Actual PlayerPage/_LibraryView with 10000 deterministic synthetic Song index entries. Programmatic ScrollController.jumpTo on every vsync; no OS wheel/input, directory import, metadata/artwork IO, audio playback or network load.',
       'dataset': {
@@ -692,6 +746,7 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
     home: PlayerPage(
       controller: widget.controller,
       libraryScrollController: _scroll,
+      libraryRowDiagnostics: _rowLifecycle,
     ),
   );
 

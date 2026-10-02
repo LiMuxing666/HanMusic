@@ -4,9 +4,11 @@ class _LibraryPlayerPage extends StatefulWidget {
   const _LibraryPlayerPage({
     required this.controller,
     this.libraryScrollController,
+    this.libraryRowDiagnostics,
   });
   final PlayerController controller;
   final ScrollController? libraryScrollController;
+  final LibraryRowLifecycleDiagnostics? libraryRowDiagnostics;
 
   @override
   State<_LibraryPlayerPage> createState() => _LibraryPlayerPageState();
@@ -104,6 +106,7 @@ class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
                                   controller: controller,
                                   scrollController:
                                       widget.libraryScrollController,
+                                  rowDiagnostics: widget.libraryRowDiagnostics,
                                 ),
                               },
                             ),
@@ -311,9 +314,14 @@ class _LibraryHeader extends StatelessWidget {
 }
 
 class _LibraryView extends StatelessWidget {
-  const _LibraryView({required this.controller, this.scrollController});
+  const _LibraryView({
+    required this.controller,
+    this.scrollController,
+    this.rowDiagnostics,
+  });
   final PlayerController controller;
   final ScrollController? scrollController;
+  final LibraryRowLifecycleDiagnostics? rowDiagnostics;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -421,22 +429,86 @@ class _LibraryView extends StatelessWidget {
               // keyboard paging to retain its focused row until focus leaves.
               addAutomaticKeepAlives: true,
               padding: const EdgeInsets.only(bottom: 14),
-              itemBuilder: (context, index) => _LibrarySongRow(
-                key: ValueKey(songs[index].id),
-                song: songs[index],
-                current: currentId == songs[index].id,
-                wide: bounds.maxWidth >= 850,
-                onPlay: () => controller.playLibrarySong(songs[index]),
-                onQueue: () => controller.addToQueue(songs[index]),
-                onRemove: () =>
-                    _confirmLibraryRemoval(context, controller, songs[index]),
-              ),
+              itemBuilder: (context, index) {
+                final song = songs[index];
+                final rowKey = ValueKey(song.id);
+                final wide = bounds.maxWidth >= 850;
+                final row = _LibrarySongRow(
+                  key: rowDiagnostics == null ? rowKey : null,
+                  song: song,
+                  current: currentId == song.id,
+                  wide: wide,
+                  diagnostics: rowDiagnostics,
+                  onPlay: () => controller.playLibrarySong(song),
+                  onQueue: () => controller.addToQueue(song),
+                  onRemove: () =>
+                      _confirmLibraryRemoval(context, controller, song),
+                );
+                final diagnostics = rowDiagnostics;
+                if (diagnostics == null) return row;
+                // The sliver still sees the same song identity as its direct
+                // child's key. This extra Element exists only in diagnostics.
+                return _DiagnosticLibraryRow(
+                  key: rowKey,
+                  diagnostics: diagnostics,
+                  wideAtMount: wide,
+                  child: row,
+                );
+              },
             ),
           );
         }),
       ),
     ],
   );
+}
+
+class _DiagnosticLibraryRow extends StatefulWidget {
+  const _DiagnosticLibraryRow({
+    super.key,
+    required this.diagnostics,
+    required this.wideAtMount,
+    required this.child,
+  });
+
+  final LibraryRowLifecycleDiagnostics diagnostics;
+  final bool wideAtMount;
+  final Widget child;
+
+  @override
+  State<_DiagnosticLibraryRow> createState() => _DiagnosticLibraryRowState();
+}
+
+class _DiagnosticLibraryRowState extends State<_DiagnosticLibraryRow> {
+  late LibraryRowLifecycleDiagnostics _diagnostics;
+  late bool _mountedWide;
+
+  @override
+  void initState() {
+    super.initState();
+    _diagnostics = widget.diagnostics;
+    _mountedWide = widget.wideAtMount;
+    _diagnostics._mount(_mountedWide);
+  }
+
+  @override
+  void didUpdateWidget(_DiagnosticLibraryRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (identical(oldWidget.diagnostics, widget.diagnostics)) return;
+    _diagnostics._dispose(_mountedWide);
+    _diagnostics = widget.diagnostics;
+    _mountedWide = widget.wideAtMount;
+    _diagnostics._mount(_mountedWide);
+  }
+
+  @override
+  void dispose() {
+    _diagnostics._dispose(_mountedWide);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 class _LibraryEmpty extends StatelessWidget {
@@ -493,6 +565,7 @@ class _LibrarySongRow extends StatelessWidget {
     required this.song,
     required this.current,
     required this.wide,
+    this.diagnostics,
     required this.onPlay,
     required this.onQueue,
     required this.onRemove,
@@ -500,12 +573,14 @@ class _LibrarySongRow extends StatelessWidget {
   final Song song;
   final bool current;
   final bool wide;
+  final LibraryRowLifecycleDiagnostics? diagnostics;
   final VoidCallback onPlay;
   final VoidCallback onQueue;
   final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
+    diagnostics?._build(wide);
     final artist = song.artist?.trim().isNotEmpty == true
         ? song.artist!
         : '未知歌手';
