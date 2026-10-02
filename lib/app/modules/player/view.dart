@@ -365,6 +365,8 @@ class _SongCard extends StatelessWidget {
         final loading = controller.isLoading.value;
         final playing = controller.isPlaying.value;
         final duration = controller.duration.value;
+        final artist = song?.artist?.trim();
+        final album = song?.album?.trim();
         final details = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -409,31 +411,41 @@ class _SongCard extends StatelessWidget {
                 style: TextStyle(color: _muted, height: 1.8),
               )
             else ...[
-              Tooltip(
-                message: song.isOnline
-                    ? controller.sourceLabel(song)
-                    : song.path,
-                child: Row(
-                  children: [
-                    Icon(
-                      song.isOnline
-                          ? Icons.cloud_outlined
-                          : Icons.audio_file_outlined,
-                      size: 17,
-                      color: _muted,
-                    ),
-                    const SizedBox(width: 7),
-                    Expanded(
-                      child: Text(
-                        song.isOnline ? song.artist ?? '未知歌手' : song.fileName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _muted),
-                      ),
-                    ),
-                  ],
-                ),
+              _SongMetadataLine(
+                valueKey: const Key('now-playing-artist'),
+                icon: Icons.person_outline_rounded,
+                text: '歌手：${artist?.isNotEmpty == true ? artist : '未知歌手'}',
               ),
+              const SizedBox(height: 6),
+              _SongMetadataLine(
+                valueKey: const Key('now-playing-album'),
+                icon: Icons.album_outlined,
+                text: '专辑：${album?.isNotEmpty == true ? album : '未知专辑'}',
+              ),
+              if (!song.isOnline) ...[
+                const SizedBox(height: 8),
+                Tooltip(
+                  message: song.path,
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.audio_file_outlined,
+                        size: 17,
+                        color: _muted,
+                      ),
+                      const SizedBox(width: 7),
+                      Expanded(
+                        child: Text(
+                          song.fileName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: _muted),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 14),
               Wrap(
                 spacing: 10,
@@ -479,7 +491,7 @@ class _SongCard extends StatelessWidget {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Center(child: _MusicArtwork(size: 164)),
+                  Center(child: _MusicArtwork(size: 164, song: song)),
                   const SizedBox(height: 24),
                   details,
                 ],
@@ -487,7 +499,7 @@ class _SongCard extends StatelessWidget {
             }
             return Row(
               children: [
-                const _MusicArtwork(size: 190),
+                _MusicArtwork(size: 190, song: song),
                 const SizedBox(width: 30),
                 Expanded(child: details),
               ],
@@ -499,15 +511,77 @@ class _SongCard extends StatelessWidget {
   }
 }
 
+class _SongMetadataLine extends StatelessWidget {
+  const _SongMetadataLine({
+    required this.valueKey,
+    required this.icon,
+    required this.text,
+  });
+
+  final Key valueKey;
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: text,
+    child: Row(
+      children: [
+        Icon(icon, size: 17, color: _muted),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            text,
+            key: valueKey,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: _muted),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 class _MusicArtwork extends StatelessWidget {
-  const _MusicArtwork({required this.size});
+  const _MusicArtwork({required this.size, this.song});
 
   final double size;
+  final Song? song;
 
   @override
   Widget build(BuildContext context) {
+    final artwork = song?.artworkPath;
+    return SizedBox.square(
+      key: const Key('now-playing-artwork'),
+      dimension: size,
+      child: artwork == null || artwork.isEmpty
+          ? _fallback()
+          : ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: Image.file(
+                File(artwork),
+                key: const Key('now-playing-cover'),
+                width: size,
+                height: size,
+                fit: BoxFit.cover,
+                gaplessPlayback: false,
+                cacheWidth: (size * MediaQuery.devicePixelRatioOf(context))
+                    .round()
+                    .clamp(1, 4096),
+                semanticLabel: '${song!.title}的专辑封面',
+                frameBuilder: (_, child, frame, synchronouslyLoaded) =>
+                    frame == null && !synchronouslyLoaded ? _fallback() : child,
+                errorBuilder: (_, _, _) => _fallback(),
+              ),
+            ),
+    );
+  }
+
+  Widget _fallback() {
     return ExcludeSemantics(
       child: Container(
+        key: const Key('now-playing-cover-fallback'),
         width: size,
         height: size,
         clipBehavior: Clip.antiAlias,

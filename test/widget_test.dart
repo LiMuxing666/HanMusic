@@ -1423,6 +1423,186 @@ void main() {
   });
 
   testWidgets(
+    'now playing decodes artwork and replaces missing or broken covers',
+    (tester) async {
+      final captureKey = GlobalKey();
+      final artwork = (await tester.runAsync(() async {
+        final base = Directory('D:/dev/tmp/hanmusic-widget-artwork');
+        await base.create(recursive: true);
+        final directory = await base.createTemp('now-playing-');
+        final recorder = ui.PictureRecorder();
+        Canvas(recorder).drawColor(const Color(0xFFBE3456), BlendMode.src);
+        final picture = recorder.endRecording();
+        final image = await picture.toImage(8, 8);
+        try {
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          final valid = File('${directory.path}/valid.png');
+          final invalid = File('${directory.path}/invalid.png');
+          await valid.writeAsBytes(bytes!.buffer.asUint8List());
+          await invalid.writeAsBytes([0, 1, 2, 3]);
+          return (directory: directory, valid: valid, invalid: invalid);
+        } finally {
+          image.dispose();
+          picture.dispose();
+        }
+      }))!;
+      try {
+        await _withPlayer(
+          tester,
+          withLibrary: true,
+          captureKey: captureKey,
+          run: (fixture) async {
+            final song = _librarySongs(1).single;
+            final valid = song.copyWith(artworkPath: artwork.valid.path);
+            final broken = song.copyWith(artworkPath: artwork.invalid.path);
+            await tester.tap(find.byKey(const Key('nav-1')));
+            await tester.pumpAndSettle();
+            final area = find.byKey(const Key('now-playing-artwork'));
+            final cover = find.byKey(const Key('now-playing-cover'));
+            final fallback = find.byKey(
+              const Key('now-playing-cover-fallback'),
+            );
+
+            Future<void> showSong(Song value) async {
+              // FileImage must begin its real file IO outside FakeAsync.
+              await tester.runAsync(() async {
+                await fixture.player.restoreQueue([value]);
+                await tester.pump();
+              });
+              await tester.pumpAndSettle();
+            }
+
+            await showSong(valid);
+            expect(await _waitForArtwork(tester, cover), isTrue);
+            await tester.pumpAndSettle();
+            expect(tester.widget<Image>(cover).gaplessPlayback, isFalse);
+            expect(fallback, findsNothing);
+            expect(tester.getSize(area), const Size.square(190));
+            final bounds = tester.getRect(area);
+            final probe = Offset(bounds.left + 8, bounds.center.dy);
+            final pixels = await _capturePagePixels(tester, captureKey);
+            expect(pixels.colorAt(probe), const Color(0xFFBE3456));
+            await tester.runAsync(() async {
+              final boundary =
+                  captureKey.currentContext!.findRenderObject()!
+                      as RenderRepaintBoundary;
+              final image = await boundary.toImage(pixelRatio: 1);
+              try {
+                final bytes = await image.toByteData(
+                  format: ui.ImageByteFormat.png,
+                );
+                final output = File('build/verification/now-playing-dev22.png');
+                await output.parent.create(recursive: true);
+                await output.writeAsBytes(bytes!.buffer.asUint8List());
+              } finally {
+                image.dispose();
+              }
+            });
+
+            await showSong(song);
+            expect(cover, findsNothing);
+            expect(fallback, findsOneWidget);
+            final missingPixels = await _capturePagePixels(tester, captureKey);
+            expect(
+              missingPixels.colorAt(probe),
+              isNot(const Color(0xFFBE3456)),
+            );
+            await showSong(valid);
+            expect(await _waitForArtwork(tester, cover), isTrue);
+            await tester.pumpAndSettle();
+            expect(fallback, findsNothing);
+            await showSong(broken);
+            expect(await _waitForArtwork(tester, cover), isFalse);
+            await tester.pumpAndSettle();
+            expect(fallback, findsOneWidget);
+            final brokenPixels = await _capturePagePixels(tester, captureKey);
+            expect(brokenPixels.colorAt(probe), isNot(const Color(0xFFBE3456)));
+            expect(_playButton.hitTestable(), findsOneWidget);
+            expect(tester.takeException(), isNull);
+          },
+        );
+      } finally {
+        await FileImage(artwork.valid).evict();
+        await FileImage(artwork.invalid).evict();
+        await tester.runAsync(() async {
+          await artwork.valid.delete();
+          await artwork.invalid.delete();
+          await artwork.directory.delete();
+        });
+      }
+    },
+  );
+
+  testWidgets(
+    'now playing metadata handles long blank and online values at large text',
+    (tester) async {
+      await _withPlayer(
+        tester,
+        withLibrary: true,
+        size: const Size(800, 600),
+        textScale: 2,
+        run: (fixture) async {
+          const artist = '跨越山川与海洋的特别合作音乐人以及远方合唱团共同演出的超长歌手名称';
+          const album = '收藏一路晚霞与夜色的现场录音纪念专辑以及尚未结束的旅途特别完整版';
+          final local = _librarySongs(
+            1,
+          ).single.copyWith(artist: artist, album: album);
+          final online = Song.online(
+            sourceId: 'metadata-source',
+            trackId: 'metadata-track',
+            title: '在线元数据测试歌曲',
+            artist: artist,
+            album: album,
+          );
+          await tester.tap(find.byKey(const Key('nav-1')));
+          await tester.pumpAndSettle();
+
+          Future<void> checkMetadata(String name, String value) async {
+            final field = find.byKey(Key('now-playing-$name'));
+            final text = tester.widget<Text>(field);
+            final label = name == 'artist' ? '歌手' : '专辑';
+            expect(text.data, '$label：$value');
+            expect(text.maxLines, 2);
+            expect(text.overflow, TextOverflow.ellipsis);
+            final tooltip = tester.widget<Tooltip>(
+              find.ancestor(of: field, matching: find.byType(Tooltip)),
+            );
+            expect(tooltip.message, contains(value));
+            await tester.ensureVisible(field);
+            await tester.pumpAndSettle();
+            expect(field.hitTestable(), findsOneWidget);
+            expect(_playButton.hitTestable(), findsOneWidget);
+            expect(tester.getRect(_playButton).bottom, lessThan(600));
+            expect(tester.takeException(), isNull);
+          }
+
+          await fixture.player.restoreQueue([local]);
+          await tester.pumpAndSettle();
+          await checkMetadata('artist', artist);
+          await checkMetadata('album', album);
+          expect(find.text(local.fileName), findsOneWidget);
+          expect(find.byTooltip(local.path), findsOneWidget);
+          await fixture.player.restoreQueue([
+            local.copyWith(artist: '  \t ', album: ' \n '),
+          ]);
+          await tester.pumpAndSettle();
+          await checkMetadata('artist', '未知歌手');
+          await checkMetadata('album', '未知专辑');
+          await fixture.player.restoreQueue([online]);
+          await tester.pumpAndSettle();
+          await checkMetadata('artist', artist);
+          await checkMetadata('album', album);
+          expect(find.text('在线音乐'), findsOneWidget);
+          expect(find.byTooltip(online.path), findsNothing);
+          expect(find.text(local.fileName), findsNothing);
+          expect(fixture.backend.loadedUris, isEmpty);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+  );
+
+  testWidgets(
     'clear queue confirmation preserves cancellation and stops without deleting library',
     (tester) async {
       await _withPlayer(
