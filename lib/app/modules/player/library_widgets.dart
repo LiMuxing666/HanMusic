@@ -578,6 +578,41 @@ class _LibrarySongRow extends StatelessWidget {
   final VoidCallback onQueue;
   final VoidCallback onRemove;
 
+  List<PopupMenuEntry<String>> _menuItems() => [
+    PopupMenuItem(
+      value: 'queue',
+      enabled: !song.isMissing,
+      child: const Text('加入播放队列'),
+    ),
+    const PopupMenuItem(value: 'remove', child: Text('从曲库移除（保留文件）')),
+  ];
+
+  void _selectMenuAction(String action) {
+    if (action == 'queue') {
+      if (!song.isMissing) onQueue();
+    } else if (action == 'remove') {
+      onRemove();
+    }
+  }
+
+  Future<void> _showContextMenu(
+    BuildContext context,
+    Offset globalPosition,
+  ) async {
+    final overlay =
+        Navigator.of(context).overlay!.context.findRenderObject()! as RenderBox;
+    final position = overlay.globalToLocal(globalPosition);
+    final action = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(position.dx, position.dy, 0, 0),
+        Offset.zero & overlay.size,
+      ),
+      items: _menuItems(),
+    );
+    if (action != null && context.mounted) _selectMenuAction(action);
+  }
+
   @override
   Widget build(BuildContext context) {
     diagnostics?._build(wide);
@@ -596,6 +631,8 @@ class _LibrarySongRow extends StatelessWidget {
           key: ValueKey('library-song-${song.id}'),
           borderRadius: BorderRadius.circular(12),
           onTap: song.isMissing ? null : onPlay,
+          onSecondaryTapUp: (details) async =>
+              _showContextMenu(context, details.globalPosition),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
             child: Row(
@@ -668,19 +705,8 @@ class _LibrarySongRow extends StatelessWidget {
                 ),
                 PopupMenuButton<String>(
                   tooltip: '${song.title}的操作',
-                  onSelected: (value) =>
-                      value == 'queue' ? onQueue() : onRemove(),
-                  itemBuilder: (_) => [
-                    PopupMenuItem(
-                      value: 'queue',
-                      enabled: !song.isMissing,
-                      child: const Text('加入播放队列'),
-                    ),
-                    const PopupMenuItem(
-                      value: 'remove',
-                      child: Text('从曲库移除（保留文件）'),
-                    ),
-                  ],
+                  onSelected: _selectMenuAction,
+                  itemBuilder: (_) => _menuItems(),
                 ),
               ],
             ),

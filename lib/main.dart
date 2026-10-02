@@ -18,6 +18,7 @@ import 'app/data/sources/windows_power_events.dart';
 import 'app/routes/app_pages.dart';
 import 'app/modules/player/controller.dart';
 import 'app/modules/startup/startup_failure_app.dart';
+import 'app/modules/startup/startup_loading_app.dart';
 import 'app/modules/startup/unsaved_exit_dialog.dart';
 import 'app/services/app_persistence_service.dart';
 import 'app/services/app_shutdown_coordinator.dart';
@@ -36,6 +37,13 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   Directory? dataDirectory;
   try {
+    runApp(const StartupLoadingApp());
+    // The Windows runner shows its window after Flutter's first frame. Do not
+    // wait indefinitely when frames are disabled (for example, screen off).
+    await WidgetsBinding.instance.endOfFrame.timeout(
+      const Duration(milliseconds: 500),
+      onTimeout: () {},
+    );
     final configured = Platform.environment['HANMUSIC_DATA_DIR'];
     dataDirectory = configured != null && path.isAbsolute(configured)
         ? Directory(configured)

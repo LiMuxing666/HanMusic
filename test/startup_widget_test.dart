@@ -1,9 +1,26 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:han_music/app/modules/startup/startup_failure_app.dart';
+import 'package:han_music/app/modules/startup/startup_loading_app.dart';
 import 'package:han_music/app/modules/startup/unsaved_exit_dialog.dart';
 
 void main() {
+  testWidgets('startup progress is visible at double text scale', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 600));
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(() async {
+      tester.platformDispatcher.clearTextScaleFactorTestValue();
+      await tester.binding.setSurfaceSize(null);
+    });
+    await tester.pumpWidget(const StartupLoadingApp());
+    expect(find.text('正在打开 HanMusic…'), findsOneWidget);
+    expect(find.text('正在检查曲库与播放状态，请稍候。'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('locked startup can be read and exited at double text scale', (
     tester,
   ) async {

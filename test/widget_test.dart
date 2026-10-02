@@ -255,6 +255,88 @@ void main() {
     );
   }
 
+  testWidgets(
+    'library row right click opens the same actions at the pointer',
+    (tester) async {
+      await _withPlayer(
+        tester,
+        withLibrary: true,
+        run: (fixture) async {
+          final songs = _librarySongs(2);
+          songs[1] = songs[1].copyWith(isMissing: true);
+          fixture.library!.replaceAll(songs);
+          await tester.pumpAndSettle();
+
+          final point = tester.getCenter(find.text(songs[0].title));
+          await tester.tapAt(
+            point,
+            kind: PointerDeviceKind.mouse,
+            buttons: kSecondaryMouseButton,
+          );
+          await tester.pumpAndSettle();
+          final queueAction = find.text('加入播放队列');
+          expect(queueAction, findsOneWidget);
+          expect(
+            (tester.getTopLeft(queueAction).dx - point.dx).abs(),
+            lessThan(96),
+          );
+          expect(fixture.backend.playCalls, 0);
+          await tester.tap(queueAction);
+          await tester.pumpAndSettle();
+          expect(fixture.player.queue.map((song) => song.id), [songs[0].id]);
+          expect(fixture.backend.playCalls, 0);
+
+          await tester.tapAt(
+            tester.getCenter(find.text(songs[1].title)),
+            kind: PointerDeviceKind.mouse,
+            buttons: kSecondaryMouseButton,
+          );
+          await tester.pumpAndSettle();
+          final disabledQueue = tester.widget<PopupMenuItem<String>>(
+            find.ancestor(
+              of: find.text('加入播放队列'),
+              matching: find.byType(PopupMenuItem<String>),
+            ),
+          );
+          expect(disabledQueue.enabled, isFalse);
+          await tester.tap(find.text('从曲库移除（保留文件）'));
+          await tester.pumpAndSettle();
+          expect(find.text('从曲库移除？'), findsOneWidget);
+          await tester.tap(find.text('保留'));
+          await tester.pumpAndSettle();
+          expect(fixture.library!.songs, hasLength(2));
+
+          await tester.tap(find.byTooltip('${songs[0].title}的操作'));
+          await tester.pumpAndSettle();
+          expect(find.text('加入播放队列'), findsOneWidget);
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+          await tester.pumpAndSettle();
+          final menu = find.byTooltip('${songs[0].title}的操作');
+          for (var step = 0; step < 100 && !_primaryFocusWithin(menu); step++) {
+            await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+            await tester.pumpAndSettle();
+          }
+          expect(_primaryFocusWithin(menu), isTrue);
+          await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+          await tester.pumpAndSettle();
+          expect(find.text('加入播放队列'), findsOneWidget);
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+          await tester.pumpAndSettle();
+          await tester.tap(
+            find.descendant(
+              of: find.byKey(ValueKey('library-song-${songs[0].id}')),
+              matching: find.text(songs[0].title),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(fixture.backend.playCalls, 1);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.windows),
+  );
+
   for (final configuration in [
     (size: const Size(1280, 720), scale: 1.0),
     (size: const Size(800, 600), scale: 2.0),
