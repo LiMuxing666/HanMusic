@@ -288,6 +288,7 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
   double _distance = 0;
   double _previousOffset = 0;
   double _maximumExtent = 0;
+  final _viewportSamples = <({double offset, double viewportDimension})>[];
   Duration _lastElapsed = Duration.zero;
   Duration? _measurementStartedAt;
   Size _logicalSize = Size.zero;
@@ -359,6 +360,10 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
     }
     if (_startUs != null) {
       _scrollTicks++;
+      _viewportSamples.add((
+        offset: offset,
+        viewportDimension: position.viewportDimension,
+      ));
       _minimumOffset = math.min(_minimumOffset, offset);
       _maximumOffset = math.max(_maximumOffset, offset);
       _distance += (offset - _previousOffset).abs();
@@ -593,6 +598,47 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
     };
   }
 
+  Map<String, Object?> _summarizeAdjacentViewportCoverage() {
+    var nonOverlappingPairs = 0;
+    var positiveGapLogicalPx = 0.0;
+    var maximumAdjacentOffsetDeltaLogicalPx = 0.0;
+    var totalAdjacentOffsetDeltaLogicalPx = 0.0;
+    for (var index = 1; index < _viewportSamples.length; index++) {
+      final previous = _viewportSamples[index - 1];
+      final current = _viewportSamples[index];
+      final delta = (current.offset - previous.offset).abs();
+      totalAdjacentOffsetDeltaLogicalPx += delta;
+      maximumAdjacentOffsetDeltaLogicalPx = math.max(
+        maximumAdjacentOffsetDeltaLogicalPx,
+        delta,
+      );
+      final gap = current.offset >= previous.offset
+          ? current.offset - (previous.offset + previous.viewportDimension)
+          : previous.offset - (current.offset + current.viewportDimension);
+      if (gap > 0) {
+        nonOverlappingPairs++;
+        positiveGapLogicalPx += gap;
+      }
+    }
+    final pairCount = math.max(0, _viewportSamples.length - 1);
+    return {
+      'definition':
+          'Each measurement tick records the requested half-open viewport [offset, offset + viewportDimension). A pair is counted only when adjacent requested viewports have a positive gap. Gaps are summed per pair, so revisited content may be counted again; this does not measure painted rows or OS input.',
+      'sampleCount': _viewportSamples.length,
+      'adjacentPairCount': pairCount,
+      'nonOverlappingAdjacentPairs': nonOverlappingPairs,
+      'nonOverlappingAdjacentPercent': pairCount == 0
+          ? 0.0
+          : nonOverlappingPairs * 100 / pairCount,
+      'positiveGapLogicalPx': positiveGapLogicalPx,
+      'maximumAdjacentOffsetDeltaLogicalPx':
+          maximumAdjacentOffsetDeltaLogicalPx,
+      'meanAdjacentOffsetDeltaLogicalPx': pairCount == 0
+          ? 0.0
+          : totalAdjacentOffsetDeltaLogicalPx / pairCount,
+    };
+  }
+
   Future<void> _finish() async {
     if (_finished) return;
     _finished = true;
@@ -621,6 +667,12 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
         : (_lastElapsed - _measurementStartedAt!).inMicroseconds / 1000000;
     final uiThreadCpu = _summarizeUiThreadCpu();
     final rowLifecycle = _summarizeRowLifecycle();
+    final adjacentViewportCoverage = _summarizeAdjacentViewportCoverage();
+    if (adjacentViewportCoverage['sampleCount'] != _scrollTicks) {
+      widget.errors.add(
+        'Requested viewport sample count does not match scroll ticks.',
+      );
+    }
     _uiThreadCpuClock.dispose();
     final completed =
         _endUs != null &&
@@ -681,6 +733,7 @@ class _PerformanceProbeState extends State<_PerformanceProbe>
         'maxSampledOffset': _maximumOffset,
         'distanceLogicalPx': _distance,
         'directionChanges': _directionChanges,
+        'adjacentViewportCoverage': adjacentViewportCoverage,
       },
       'timingsMs': {
         'ui': _distribution(uiTimes),
