@@ -1,6 +1,6 @@
 # Windows M5 在线加载切歌（dev.26）
 
-日期：2026-10-02。版本：`0.1.0-dev.26+26`。代码提交待记录。M5 仍在进行中。
+日期：2026-10-02。版本：`0.1.0-dev.26+26`。代码提交：`6a277c09620a31e890b1f6be00be3913b0b11e05`。M5 仍在进行中。
 
 ## 本轮改动
 
@@ -14,11 +14,11 @@
 - **5 项定向测试通过**：`online_controller_test.dart` 中 `online opening` 前缀的两项场景，确认旧操作迟到成功或失败均不解除新操作的等待状态；`online_widget_test.dart` 中同前缀的两项场景，覆盖 800×600 / 200% 字号下鼠标选择和 Tab / Enter 键盘选择，A 等待期间可选择 B 播放，A 迟到不覆盖 B。
 - `online_playback_test.dart` 既有 `replacing a source still serializes native loads` 场景通过，确认切换来源仍保留原生加载串行屏障；该项计入上述 5 项。
 - 四个修改的 Dart 文件定向 `dart analyze` 无问题，格式检查 0 变化，`git diff --check` 及只读 review 通过。
-- 正常 `lib/main.dart` Windows Release 构建与完整 ZIP 待生成，源码提交、包大小、SHA-256 和构建清单待记录。
-- 开发机完整包检查待执行；受控异步测试不代表真实网络、原生音频加载或 Windows 键鼠交互验收通过。
 - 本轮未运行全量回归或性能采集。
 
-包的启动与手工验收步骤见[预览说明](./12-Windows预览运行与验收.md)。
+Windows 正常 `lib/main.dart` Release 构建通过。完整 ZIP：`D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-dev.26-M5.zip`，21,003,126 字节，SHA-256：`bb8ed4ab7f18084266b5bdf8b7e03893cb2899ddfeb2661933fb72f866b4c8f9`。`BUILD-MANIFEST.json` 记录上述源码提交、`version=0.1.0-dev.26+26`、`gitDirty=false`、`publicReleaseReady=false`，文件清单为 35 项；包内 README 已包含在线加载期间切歌的说明和手工验收步骤。
+
+开发机包检查 **6/6 通过**：ZIP 校验、完整清单、x64 运行库、系统 PowerShell 启动器 8 秒响应，以及数据目录锁持有/释放。记录：`D:\dev\tmp\hanmusic-m5-package-verification\验收 包 20261002-234200-780-e09eb380\verification.json`。没有执行 GUI 操作、实际播放、正常关窗或干净机验收；包的启动与手工验收步骤见[预览说明](./12-Windows预览运行与验收.md)。受控异步测试不代表真实网络、原生音频加载或 Windows 键鼠交互验收通过。
 
 ## 验收边界
 
