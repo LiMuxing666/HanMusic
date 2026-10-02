@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:han_music/app/data/models/song.dart';
+import 'package:han_music/app/data/models/queue_add_result.dart';
 import 'package:han_music/app/data/models/sleep_timer_mode.dart';
 import 'package:han_music/app/data/repositories/local_song_picker.dart';
 import 'package:han_music/app/data/repositories/local_library_repository.dart';
@@ -352,6 +353,27 @@ void main() {
     });
 
     tearDown(() => library.onClose());
+
+    test('queue additions use current availability and stay paused', () {
+      library.replaceAll([song.copyWith(isMissing: true)]);
+      expect(controller.addToQueue(song), QueueAddResult.unavailable);
+      expect(player.queue, isEmpty);
+
+      library.replaceAll([]);
+      expect(controller.addToQueue(song), QueueAddResult.unavailable);
+      library.replaceAll([song.copyWith(trackTitle: '更新后的曲名')]);
+      controller.beginExit();
+      expect(controller.addToQueue(song), QueueAddResult.unavailable);
+      expect(player.queue, isEmpty);
+      controller.cancelExit();
+
+      expect(controller.addToQueue(song), QueueAddResult.added);
+      expect(player.queue.single.title, '更新后的曲名');
+      expect(controller.addToQueue(song), QueueAddResult.unchanged);
+      expect(player.queue, hasLength(1));
+      expect(player.isPlaying.value, isFalse);
+      expect(backend.loadedUris, isEmpty);
+    });
 
     test(
       'multi-file import only indexes music without replacing playback',

@@ -20,6 +20,27 @@ class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
   final _onlineSearchKey = GlobalKey<MusicSearchFieldState>();
   PlayerController get controller => widget.controller;
   OnlineMusicController? _online;
+  ({String message, bool canOpenQueue})? _queueNotice;
+
+  void _enqueueAndNotify(Song song) {
+    if (!mounted) return;
+    final result = controller.addToQueue(song);
+    setState(() {
+      _queueNotice = (
+        message: switch (result) {
+          QueueAddResult.added => '已加入播放队列：${song.title}',
+          QueueAddResult.unchanged => '已在播放队列中：${song.title}',
+          QueueAddResult.unavailable => '暂时无法加入播放队列，请检查歌曲状态。',
+        },
+        canOpenQueue: result != QueueAddResult.unavailable,
+      );
+    });
+  }
+
+  void _selectSection(int section) => setState(() {
+    _section = section;
+    _queueNotice = null;
+  });
 
   @override
   void initState() {
@@ -29,7 +50,7 @@ class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
       _online = OnlineMusicController(
         service: service,
         playSong: controller.playOnlineSong,
-        enqueueSong: controller.addToQueue,
+        enqueueSong: _enqueueAndNotify,
       );
     }
   }
@@ -63,7 +84,7 @@ class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
                     compact: compact,
                     selected: _section,
                     showOnline: _online != null,
-                    onSelected: (value) => setState(() => _section = value),
+                    onSelected: _selectSection,
                   ),
                   Expanded(
                     child: Column(
@@ -123,6 +144,7 @@ class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
                                     _ => _LibraryView(
                                       controller: controller,
                                       searchFieldKey: _librarySearchKey,
+                                      onQueue: _enqueueAndNotify,
                                       scrollController:
                                           widget.libraryScrollController,
                                       rowDiagnostics:
@@ -134,6 +156,15 @@ class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
                             ),
                           ),
                         ),
+                        if (_queueNotice case final notice?)
+                          _QueueActionNotice(
+                            message: notice.message,
+                            onOpenQueue: notice.canOpenQueue
+                                ? () => _selectSection(2)
+                                : null,
+                            onDismiss: () =>
+                                setState(() => _queueNotice = null),
+                          ),
                         _DesktopTransport(controller: controller),
                       ],
                     ),
@@ -143,6 +174,67 @@ class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
             },
           ),
         ),
+      ),
+    ),
+  );
+}
+
+class _QueueActionNotice extends StatelessWidget {
+  const _QueueActionNotice({
+    required this.message,
+    required this.onOpenQueue,
+    required this.onDismiss,
+  });
+
+  final String message;
+  final VoidCallback? onOpenQueue;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    liveRegion: true,
+    child: Container(
+      key: const Key('queue-action-notice'),
+      margin: const EdgeInsets.fromLTRB(18, 8, 18, 0),
+      padding: const EdgeInsets.only(left: 12, right: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE7F0E2),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            onOpenQueue == null
+                ? Icons.info_outline_rounded
+                : Icons.playlist_add_check_rounded,
+            color: _green,
+            size: 22,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Tooltip(
+              message: message,
+              child: Text(
+                message,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: _green, fontSize: 13),
+              ),
+            ),
+          ),
+          if (onOpenQueue != null)
+            TextButton(
+              key: const Key('queue-notice-open'),
+              onPressed: onOpenQueue,
+              child: const Text('查看队列'),
+            ),
+          IconButton(
+            key: const Key('queue-notice-dismiss'),
+            tooltip: '关闭队列提示',
+            onPressed: onDismiss,
+            icon: const Icon(Icons.close_rounded, size: 20),
+          ),
+        ],
       ),
     ),
   );
@@ -339,11 +431,13 @@ class _LibraryView extends StatelessWidget {
   const _LibraryView({
     required this.controller,
     required this.searchFieldKey,
+    required this.onQueue,
     this.scrollController,
     this.rowDiagnostics,
   });
   final PlayerController controller;
   final GlobalKey<MusicSearchFieldState> searchFieldKey;
+  final ValueChanged<Song> onQueue;
   final ScrollController? scrollController;
   final LibraryRowLifecycleDiagnostics? rowDiagnostics;
 
@@ -461,7 +555,7 @@ class _LibraryView extends StatelessWidget {
                   wide: wide,
                   diagnostics: rowDiagnostics,
                   onPlay: () => controller.playLibrarySong(song),
-                  onQueue: () => controller.addToQueue(song),
+                  onQueue: () => onQueue(song),
                   onRemove: () =>
                       _confirmLibraryRemoval(context, controller, song),
                 );

@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 
 import '../../data/models/song.dart';
 import '../../data/models/play_mode.dart';
+import '../../data/models/queue_add_result.dart';
 import '../../data/models/sleep_timer_mode.dart';
 import '../../data/repositories/local_song_picker.dart';
 import '../../services/library_service.dart';
@@ -205,8 +206,19 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
     await _player.removeFromQueue(song.id);
   }
 
-  void addToQueue(Song song) {
-    if (!_closed && !song.isMissing) _player.addToQueue([song]);
+  QueueAddResult addToQueue(Song song) {
+    if (_closed || _exitPending) return QueueAddResult.unavailable;
+    var current = song;
+    if (!song.isOnline && _library != null) {
+      // A context menu can outlive a missing-file refresh or index removal.
+      final indexed = _library.songs.firstWhereOrNull(
+        (item) => item.id == song.id,
+      );
+      if (indexed == null) return QueueAddResult.unavailable;
+      current = indexed;
+    }
+    if (current.isMissing) return QueueAddResult.unavailable;
+    return _player.addToQueue([current]);
   }
 
   Future<void> playQueueItem(int index) => _player.playAt(index);

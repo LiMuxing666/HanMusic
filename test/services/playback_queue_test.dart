@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:han_music/app/data/models/play_mode.dart';
+import 'package:han_music/app/data/models/queue_add_result.dart';
 import 'package:han_music/app/data/models/song.dart';
 import 'package:han_music/app/services/player_service.dart';
 import 'package:han_music/app/services/timer_service.dart';
@@ -46,6 +47,10 @@ void main() {
     expect(player.currentSong.value, isNull);
     expect(player.canPlay, isFalse);
     expect(backend.loadedUris, isEmpty);
+    expect(player.addToQueue([]), QueueAddResult.unchanged);
+    await player.shutdown();
+    expect(player.addToQueue(songs), QueueAddResult.unavailable);
+    expect(player.queue, isEmpty);
   });
 
   for (final mode in PlayMode.values) {
@@ -154,7 +159,10 @@ void main() {
 
   test('adding songs deduplicates IDs without interrupting playback', () async {
     await player.playQueue([songs[0], songs[1], songs[0]]);
-    player.addToQueue([songs[1], songs[2], songs[2]]);
+    expect(
+      player.addToQueue([songs[1], songs[2], songs[2]]),
+      QueueAddResult.added,
+    );
     expect(
       player.queue.map((song) => song.id),
       songs.take(3).map((song) => song.id),
@@ -163,8 +171,40 @@ void main() {
     expect(player.isPlaying.value, isTrue);
   });
 
+  test(
+    'duplicate queue additions preserve the remaining shuffle track without notifications',
+    () async {
+      player.playMode.value = PlayMode.shuffle;
+      await player.playQueue(songs);
+      final visited = {player.currentSong.value!.id};
+      for (var index = 1; index < songs.length - 1; index++) {
+        await completeTrack();
+        visited.add(player.currentSong.value!.id);
+      }
+      final remaining = songs.singleWhere((song) => !visited.contains(song.id));
+      final selectedId = player.currentSong.value!.id;
+      final callsBeforeAdding = backend.calls.toList();
+      var queueNotifications = 0;
+      final subscription = player.queue.listen((_) => queueNotifications++);
+      addTearDown(subscription.cancel);
+
+      expect(player.addToQueue(songs), QueueAddResult.unchanged);
+      expect(player.addToQueue([songs.first]), QueueAddResult.unchanged);
+      expect(player.addToQueue([]), QueueAddResult.unchanged);
+      await _settle();
+      expect(queueNotifications, 0);
+      expect(player.currentSong.value?.id, selectedId);
+      expect(backend.calls, callsBeforeAdding);
+      expect(player.isPlaying.value, isTrue);
+
+      await completeTrack();
+      expect(player.currentSong.value?.id, remaining.id);
+      expect(backend.loadedUris.toSet(), songs.map((song) => song.uri).toSet());
+    },
+  );
+
   test('adding to an empty queue selects a paused lazy-load track', () async {
-    player.addToQueue([songs[0]]);
+    expect(player.addToQueue([songs[0]]), QueueAddResult.added);
     expect(player.canPlay, isTrue);
     expect(player.isPlaying.value, isFalse);
     expect(backend.loadedUris, isEmpty);

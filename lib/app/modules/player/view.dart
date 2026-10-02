@@ -10,6 +10,7 @@ import '../online/view.dart';
 import '../shared/music_search_field.dart';
 import '../../data/models/song.dart';
 import '../../data/models/play_mode.dart';
+import '../../data/models/queue_add_result.dart';
 import '../../data/models/sleep_timer_mode.dart';
 
 part 'library_widgets.dart';

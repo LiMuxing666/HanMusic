@@ -256,6 +256,87 @@ void main() {
   }
 
   testWidgets(
+    'library queue feedback replaces notices and fits compact large text',
+    (tester) async {
+      await _withPlayer(
+        tester,
+        withLibrary: true,
+        size: const Size(800, 600),
+        textScale: 2,
+        run: (fixture) async {
+          final songs = _librarySongs(2);
+          songs[0] = songs[0].copyWith(
+            trackTitle: '很长的歌曲名称：沿着海岸线听风与远方的回声，直到下一次日出再次照亮窗前',
+          );
+          fixture.library!.replaceAll(songs);
+          await tester.pumpAndSettle();
+          final notice = find.byKey(const Key('queue-action-notice'));
+          final open = find.byKey(const Key('queue-notice-open'));
+          final dismiss = find.byKey(const Key('queue-notice-dismiss'));
+
+          Future<void> addSong(Song song) async {
+            final menu = find.byTooltip('${song.title}的操作');
+            await tester.ensureVisible(menu);
+            await tester.pumpAndSettle();
+            expect(menu.hitTestable(), findsOneWidget);
+            await tester.tap(menu);
+            await tester.pumpAndSettle();
+            await tester.tap(find.text('加入播放队列'));
+            await tester.pumpAndSettle();
+          }
+
+          await addSong(songs[0]);
+          expect(find.text('已加入播放队列：${songs[0].title}'), findsOneWidget);
+          expect(notice, findsOneWidget);
+          expect(open.hitTestable(), findsOneWidget);
+          expect(dismiss.hitTestable(), findsOneWidget);
+          expect(_playButton.hitTestable(), findsOneWidget);
+          expect(
+            tester.getRect(notice).bottom,
+            lessThanOrEqualTo(tester.getRect(_playButton).top),
+          );
+          expect(tester.getRect(_playButton).bottom, lessThan(600));
+          expect(tester.takeException(), isNull);
+          await tester.pump(const Duration(seconds: 10));
+          expect(notice, findsOneWidget);
+
+          await addSong(songs[0]);
+          expect(find.text('已在播放队列中：${songs[0].title}'), findsOneWidget);
+          expect(find.text('已加入播放队列：${songs[0].title}'), findsNothing);
+          expect(fixture.player.queue.map((song) => song.id), [songs[0].id]);
+          await addSong(songs[1]);
+          expect(notice, findsOneWidget);
+          expect(find.text('已加入播放队列：${songs[1].title}'), findsOneWidget);
+          expect(find.text('已在播放队列中：${songs[0].title}'), findsNothing);
+          await tester.tap(dismiss);
+          await tester.pumpAndSettle();
+          expect(notice, findsNothing);
+
+          await addSong(songs[1]);
+          await tester.tap(open);
+          await tester.pumpAndSettle();
+          expect(find.byKey(const Key('queue-list')), findsOneWidget);
+          expect(notice, findsNothing);
+          expect(fixture.player.queue.map((song) => song.id), [
+            songs[0].id,
+            songs[1].id,
+          ]);
+          await tester.tap(find.byKey(const Key('nav-0')));
+          await tester.pumpAndSettle();
+          await addSong(songs[1]);
+          await tester.tap(find.byKey(const Key('nav-1')));
+          await tester.pumpAndSettle();
+          expect(notice, findsNothing);
+          expect(fixture.backend.loadedUris, isEmpty);
+          expect(fixture.backend.playCalls, 0);
+          expect(fixture.player.isPlaying.value, isFalse);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+  );
+
+  testWidgets(
     'library row right click opens the same actions at the pointer',
     (tester) async {
       await _withPlayer(

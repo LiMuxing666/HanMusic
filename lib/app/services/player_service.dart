@@ -6,6 +6,7 @@ import 'package:get/get.dart';
 import '../data/models/play_mode.dart';
 import '../data/models/playback_guard.dart';
 import '../data/models/playback_source_exception.dart';
+import '../data/models/queue_add_result.dart';
 import '../data/models/song.dart';
 import '../data/sources/audio_backend.dart';
 
@@ -149,14 +150,17 @@ class PlayerService extends GetxService {
     await _requestSelection(selectedId, intent: intent);
   }
 
-  void addToQueue(List<Song> songs) {
-    if (_disposed) return;
+  QueueAddResult addToQueue(List<Song> songs) {
+    if (_disposed) return QueueAddResult.unavailable;
     final ids = queue.map((song) => song.id).toSet();
-    queue.addAll(songs.where((song) => ids.add(song.id)));
+    final additions = songs.where((song) => ids.add(song.id)).toList();
+    if (additions.isEmpty) return QueueAddResult.unchanged;
+    queue.addAll(additions);
     if (currentSong.value == null && queue.isNotEmpty) {
       _selectRestored(queue.first, Duration.zero);
     }
     _shuffleBag.clear();
+    return QueueAddResult.added;
   }
 
   Future<void> playAt(int index) async {

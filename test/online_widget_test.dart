@@ -564,6 +564,65 @@ void main() {
   );
 
   testWidgets(
+    'online queue feedback replaces duplicates and opens queue without playback',
+    (tester) async {
+      await _withOnline(
+        tester,
+        run: (fixture) async {
+          final songs = [
+            Song.online(sourceId: 'demo', trackId: 'first', title: '第一首在线歌曲'),
+            Song.online(sourceId: 'demo', trackId: 'second', title: '第二首在线歌曲'),
+          ];
+          fixture.repository.songsFor = (_, _, _) => songs;
+          await tester.enterText(find.byKey(const Key('online-query')), '队列反馈');
+          await tester.pump(const Duration(milliseconds: 500));
+          await tester.pumpAndSettle();
+          final notice = find.byKey(const Key('queue-action-notice'));
+
+          Future<void> addSong(Song song) async {
+            final add = find.descendant(
+              of: find.byKey(ValueKey('online-song-${song.id}')),
+              matching: find.byTooltip('加入播放队列'),
+            );
+            await tester.ensureVisible(add);
+            await tester.tap(add);
+            await tester.pumpAndSettle();
+          }
+
+          await addSong(songs[0]);
+          expect(find.text('已加入播放队列：${songs[0].title}'), findsOneWidget);
+          expect(notice, findsOneWidget);
+          await addSong(songs[0]);
+          expect(find.text('已在播放队列中：${songs[0].title}'), findsOneWidget);
+          expect(find.text('已加入播放队列：${songs[0].title}'), findsNothing);
+          expect(fixture.player.queue.map((song) => song.id), [songs[0].id]);
+          await addSong(songs[1]);
+          expect(notice, findsOneWidget);
+          expect(find.text('已加入播放队列：${songs[1].title}'), findsOneWidget);
+          expect(find.text('已在播放队列中：${songs[0].title}'), findsNothing);
+          final open = find.byKey(const Key('queue-notice-open'));
+          expect(
+            find.descendant(of: open, matching: find.text('查看队列')),
+            findsOneWidget,
+          );
+          await tester.tap(open);
+          await tester.pumpAndSettle();
+          expect(find.byKey(const Key('queue-list')), findsOneWidget);
+          expect(notice, findsNothing);
+          expect(fixture.player.queue.map((song) => song.id), [
+            songs[0].id,
+            songs[1].id,
+          ]);
+          expect(fixture.backend.loadedUris, isEmpty);
+          expect(fixture.backend.playCalls, 0);
+          expect(fixture.player.isPlaying.value, isFalse);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+  );
+
+  testWidgets(
     'search failure exposes retry and add to queue does not start playback',
     (tester) async {
       await _withOnline(
