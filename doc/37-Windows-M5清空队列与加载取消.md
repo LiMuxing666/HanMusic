@@ -1,6 +1,6 @@
 # Windows M5 清空队列与加载取消（dev.21）
 
-日期：2026-10-02。版本：`0.1.0-dev.21+21`。M5 仍在进行中。
+日期：2026-10-02。版本：`0.1.0-dev.21+21`。代码提交：`4016710348cacba14b965abf73ec37c5899aab25`。M5 仍在进行中。
 
 ## 本轮改动
 
@@ -15,7 +15,9 @@
 - 页面场景为 800×600 / 200% 字号，确认框与操作按钮可达，取消不更改播放；确认后曲库保持，完成事件不重新起播。
 - 改动文件定向静态分析与格式检查通过，未运行全量回归或性能采集。
 
-完整开发预览包信息将在构建完成后补入。
+Windows 正常 `lib/main.dart` Release 构建通过。完整 ZIP：`D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-dev.21-M5.zip`，20,989,224 字节，SHA-256：`d5edfa71888af5d7425a3648f203b7fd81a0b480d80985e0d6e768cc4acb5c5a`。`BUILD-MANIFEST.json` 记录上述源码提交、`version=0.1.0-dev.21+21`、`gitDirty=false`、`publicReleaseReady=false`，文件清单为 35 项；包内 README 已包含清空和定时行为说明。
+
+开发机包检查 **6/6 通过**：ZIP 校验、完整清单、x64 运行库、系统 PowerShell 启动器 8 秒响应以及数据目录锁持有/释放。记录：`D:\dev\tmp\hanmusic-m5-package-verification\验收 包 20261002-205418-369-0b9aa8b9\verification.json`。没有执行 GUI 操作、实际播放、正常关窗或干净机验收；使用步骤见[预览说明](./12-Windows预览运行与验收.md)。
 
 ## 验收边界
 
