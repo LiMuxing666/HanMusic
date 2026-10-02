@@ -11,3 +11,9 @@
 ## 验证边界
 
 本机字体清单确认 `Microsoft YaHei UI` 有 Regular 和 Bold。`flutter analyze --no-pub` 无问题，`dart format --output=none --set-exit-if-changed lib test tool` 检查 82 个文件、0 个待格式化，串行全量 `flutter test --no-pub --concurrency=1` **374/374 通过**，日志为 `D:\dev\tmp\hanmusic-dev16-analyze.txt` 和 `D:\dev\tmp\hanmusic-dev16-tests.txt`。这些检查覆盖布局与业务回归，不能代替同一首歌曲在真实 Windows 窗口里的新旧截图对比。dev.16 需要由用户在相同屏幕缩放下重看普通曲名（例如截图中的“G.E.M. 邓紫棋…”）和当前绿色标题，判断笔画是否恢复正常。其他干净 Windows 机器的字体可用性仍属于 M5 验收，不将本机结果推广为跨机器保证。
+
+## dev.16 本地预览包
+
+从干净提交 `83d11178a716227b44de4f3fd12cab73f6209697` 构建正常入口 `lib/main.dart` 的 Windows Release，编译完成（106.9 秒）。完整包为 `D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-dev.16-M5.zip`，20,986,687 字节，SHA-256 为 `f7886515b36639f11f5f464886a732f68f0e14a28517d116bb8457e5f658a958`；清单覆盖 34 个内容文件，另有清单文件，`gitDirty=false`，`publicReleaseReady=false`。
+
+系统 Windows PowerShell 5.1 在 D 盘中文与空格目录解压后，完整包 **6 项检查通过**：ZIP SHA、逐文件清单与无预置 UserData、x64 运行库、打包启动器八秒响应、运行中数据目录锁，以及独立验收进程停止后锁释放。报告在 `D:\dev\setup\verification\m5-font-dev16\验收 包 20261002-103336-117-b09872d3\verification.json`。该验证不测试实际中文字形或真实系统窗口交互。另从已退出的 dev.14 手测目录只复制已保存的 26 首歌曲状态到 `D:\dev\data\HanMusic\manual-test-dev16-font`，未复制锁文件，也未改动仍在运行的 dev.15 数据；此副本供同曲名视觉比较。
