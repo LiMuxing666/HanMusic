@@ -1,6 +1,6 @@
 # Windows M5 正在播放封面与元数据（dev.22）
 
-日期：2026-10-02。版本：`0.1.0-dev.22+22`。代码提交：待记录。M5 仍在进行中。
+日期：2026-10-02。版本：`0.1.0-dev.22+22`。代码提交：`c77fba79888d0b2e6d2cde815fb554b04fc60029`。M5 仍在进行中。
 
 ## 本轮改动
 
@@ -11,12 +11,14 @@
 
 ## 验证与交付
 
-- **2 项新增 Widget 测试通过**，覆盖有效封面、切歌与默认图形回退，以及元数据和大字号布局。首次命令同时传入两个 `--plain-name`，筛选条件叠加后未选中测试；改为单个 `--name` 正则后 2/2 通过，首次未产生代码测试失败。
+- **2 项新增 Widget 测试通过**：真实临时 PNG 解码与像素检查，有效封面→无封面→有效封面→损坏图片切换；800×600 / 200% 字号下长文本、空白字段降级、在线来源不重复和播放控件可达。首次命令同时传入两个 `--plain-name`，筛选条件叠加后未选中测试；改为单个 `--name` 正则后 2/2 通过，首次未产生代码测试失败。
 - `lib/app/modules/player/view.dart` 与 `test/widget_test.dart` 定向 `dart analyze`、`git diff --check` 及只读 review 通过。
 - 渲染图 `build/verification/now-playing-dev22.png` 已人工查看，封面颜色、裁剪及布局正常。测试默认字体将中文显示为方块，该图仅支持图片解码与几何布局检查，不能证明真实中文渲染通过。
 - 本轮未运行全量回归或性能采集。
 
-Windows 正常 `lib/main.dart` Release 和 dev.22 完整预览包待构建。ZIP 路径、大小、SHA-256、源码提交、构建清单及开发机包检查结果待后续填写；此处未引用旧包结果作为本轮交付证据。使用步骤见[预览说明](./12-Windows预览运行与验收.md)。
+Windows 正常 `lib/main.dart` Release 构建通过。完整 ZIP：`D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-dev.22-M5.zip`，20,991,971 字节，SHA-256：`45c4921723827f517bf4f79236e5c3de8aaf6e360fcbbc0d332d900ed3d94c4d`。`BUILD-MANIFEST.json` 记录上述源码提交、`version=0.1.0-dev.22+22`、`gitDirty=false`、`publicReleaseReady=false`，文件清单为 35 项；包内 README 已包含封面与元数据说明。
+
+开发机包检查 **6/6 通过**：ZIP 校验、完整清单、x64 运行库、系统 PowerShell 启动器 8 秒响应，以及数据目录锁持有/释放。记录：`D:\dev\tmp\hanmusic-m5-package-verification\验收 包 20261002-211141-624-9b18df4d\verification.json`。没有执行 GUI 操作、实际播放、正常关窗或干净机验收；使用步骤见[预览说明](./12-Windows预览运行与验收.md)。
 
 ## 验收边界
 
