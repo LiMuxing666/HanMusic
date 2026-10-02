@@ -904,11 +904,18 @@ class _QueueView extends StatefulWidget {
 
 class _QueueViewState extends State<_QueueView> {
   PlayerController get controller => widget.controller;
+  final _scrollController = ScrollController();
   late Worker _queueChanges;
   List<String>? _dragOrder;
   SliverReorderableListState? _reorderable;
   bool _queueCheckScheduled = false;
   bool _clearPending = false;
+  bool _locateScheduled = false;
+
+  double get _itemExtent {
+    final textScale = MediaQuery.textScalerOf(context).scale(14) / 14;
+    return 76 + (textScale - 1).clamp(0.0, 4.0) * 32;
+  }
 
   @override
   void initState() {
@@ -979,6 +986,30 @@ class _QueueViewState extends State<_QueueView> {
     }
   }
 
+  void _locateCurrent() {
+    if (!mounted || _clearPending || _locateScheduled) return;
+    _cancelDrag();
+    _locateScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _locateScheduled = false;
+      if (!mounted || _clearPending || !_scrollController.hasClients) return;
+      // Resolve identity and dimensions after any pending queue/layout change.
+      final index = controller.currentIndex;
+      final position = _scrollController.position;
+      if (index < 0 ||
+          !position.hasContentDimensions ||
+          !position.hasViewportDimension) {
+        return;
+      }
+      final extent = _itemExtent;
+      final offset = index * extent - (position.viewportDimension - extent) / 2;
+      _scrollController.jumpTo(
+        offset.clamp(position.minScrollExtent, position.maxScrollExtent),
+      );
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
   Future<void> _confirmClearQueue() async {
     if (_clearPending || controller.queue.isEmpty) return;
     _cancelDrag();
@@ -1014,6 +1045,7 @@ class _QueueViewState extends State<_QueueView> {
   @override
   void dispose() {
     _queueChanges.dispose();
+    _scrollController.dispose();
     _dragOrder = null;
     _reorderable = null;
     // The child sliver disposes its gesture and overlay when this view leaves.
@@ -1038,6 +1070,14 @@ class _QueueViewState extends State<_QueueView> {
               onChanged: (value) => controller.skipOnError.value = value,
             ),
             const SizedBox(width: 8),
+            IconButton(
+              key: const Key('queue-locate-current'),
+              tooltip: '定位当前歌曲',
+              onPressed: _clearPending || controller.currentIndex < 0
+                  ? null
+                  : _locateCurrent,
+              icon: const Icon(Icons.my_location_rounded, size: 20),
+            ),
             TextButton.icon(
               key: const Key('queue-clear'),
               onPressed: _clearPending || controller.queue.isEmpty
@@ -1062,12 +1102,13 @@ class _QueueViewState extends State<_QueueView> {
               ),
             );
           }
-          final textScale = MediaQuery.textScalerOf(context).scale(14) / 14;
           return ReorderableListView.builder(
             key: const Key('queue-list'),
+            scrollController: _scrollController,
+            padding: EdgeInsets.zero,
             buildDefaultDragHandles: false,
             itemCount: queue.length,
-            itemExtent: 76 + (textScale - 1).clamp(0.0, 4.0) * 32,
+            itemExtent: _itemExtent,
             onReorderStart: (_) {
               _dragOrder = queue.map((song) => song.id).toList();
               // The handle can still belong to the previous frame. Wait until

@@ -1768,6 +1768,132 @@ void main() {
     }
   }
 
+  testWidgets(
+    'locate current queue reveals distant songs without changing playback',
+    (tester) async {
+      await _withPlayer(
+        tester,
+        withLibrary: true,
+        size: const Size(800, 600),
+        textScale: 2,
+        run: (fixture) async {
+          final songs = _librarySongs(100);
+          fixture.player.addToQueue(songs);
+          await tester.tap(find.byKey(const Key('nav-2')));
+          await tester.pumpAndSettle();
+          final locate = find.byKey(const Key('queue-locate-current'));
+          final list = find.byKey(const Key('queue-list'));
+          final position = tester
+              .state<ScrollableState>(
+                find.descendant(of: list, matching: find.byType(Scrollable)),
+              )
+              .position;
+          expect(find.byTooltip('定位当前歌曲'), findsOneWidget);
+
+          for (final index in [99, 50]) {
+            final current = songs[index];
+            await fixture.player.playAt(index);
+            fixture.backend.emitPosition(const Duration(seconds: 37));
+            position.jumpTo(0);
+            await tester.pumpAndSettle();
+            final backendCalls = List<String>.of(fixture.backend.calls);
+            expect(_queueRow(current), findsNothing);
+            expect(locate.hitTestable(), findsOneWidget);
+            if (index == 99) {
+              await tester.tap(locate, kind: PointerDeviceKind.mouse);
+            } else {
+              await _tabToQueueControl(tester, locate);
+              expect(_primaryFocusWithin(locate), isTrue);
+              await tester.sendKeyEvent(LogicalKeyboardKey.space);
+            }
+            await tester.pumpAndSettle();
+            expect(_queueRow(current), findsOneWidget);
+            final rowBounds = tester.getRect(_queueRow(current));
+            final viewport = tester.getRect(list);
+            expect(rowBounds.top, greaterThanOrEqualTo(viewport.top - .01));
+            expect(rowBounds.bottom, lessThanOrEqualTo(viewport.bottom + .01));
+            expect(position.pixels, greaterThan(0));
+            expect(fixture.player.currentSong.value?.id, current.id);
+            expect(fixture.player.position.value, const Duration(seconds: 37));
+            expect(fixture.player.isPlaying.value, isTrue);
+            expect(fixture.player.queue.toList(), songs);
+            expect(fixture.backend.calls, backendCalls);
+            expect(_playButton.hitTestable(), findsOneWidget);
+            expect(tester.takeException(), isNull);
+          }
+        },
+      );
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.windows),
+  );
+
+  testWidgets(
+    'locate current queue follows same-frame mutations and safely leaves page',
+    (tester) async {
+      await _withPlayer(
+        tester,
+        withLibrary: true,
+        run: (fixture) async {
+          await tester.tap(find.byKey(const Key('nav-2')));
+          await tester.pumpAndSettle();
+          final locate = find.byKey(const Key('queue-locate-current'));
+          expect(tester.widget<IconButton>(locate).onPressed, isNull);
+          final songs = _librarySongs(100);
+          final current = songs[90];
+          fixture.library!.replaceAll(songs);
+          await fixture.player.restoreQueue(songs, currentId: current.id);
+          await tester.pumpAndSettle();
+          await tester.tap(find.byKey(const Key('queue-clear')));
+          await tester.pumpAndSettle();
+          expect(tester.widget<IconButton>(locate).onPressed, isNull);
+          await tester.tap(find.text('保留队列'));
+          await tester.pumpAndSettle();
+          expect(tester.widget<IconButton>(locate).onPressed, isNotNull);
+
+          await tester.tap(locate, kind: PointerDeviceKind.mouse);
+          // Both mutations happen before the frame that performs positioning.
+          fixture.controller.reorderQueue(90, 20);
+          await fixture.controller.removeFromQueue(songs.first.id);
+          final expected = fixture.player.queue.toList();
+          await tester.pumpAndSettle();
+          expect(fixture.player.currentIndex, 19);
+          expect(_queueRow(current), findsOneWidget);
+          expect(
+            tester.getRect(_queueRow(current)).center.dy,
+            closeTo(
+              tester.getRect(find.byKey(const Key('queue-list'))).center.dy,
+              1,
+            ),
+          );
+          expect(fixture.player.currentSong.value?.id, current.id);
+          expect(fixture.player.queue.toList(), expected);
+          expect(fixture.backend.loadedUris, isEmpty);
+          expect(tester.takeException(), isNull);
+
+          await tester.tap(locate, kind: PointerDeviceKind.mouse);
+          await fixture.controller.clearQueue();
+          await tester.pumpAndSettle();
+          expect(fixture.player.queue, isEmpty);
+          expect(tester.widget<IconButton>(locate).onPressed, isNull);
+          expect(tester.takeException(), isNull);
+
+          await fixture.player.restoreQueue(songs, currentId: songs[80].id);
+          await tester.pumpAndSettle();
+          await tester.tap(locate, kind: PointerDeviceKind.mouse);
+          await tester.tap(find.byKey(const Key('nav-0')));
+          await tester.pumpAndSettle();
+          expect(find.byKey(const Key('queue-list')), findsNothing);
+          expect(find.byKey(const Key('library-list')), findsOneWidget);
+          expect(fixture.player.currentSong.value?.id, songs[80].id);
+          expect(fixture.player.queue.toList(), songs);
+          expect(fixture.backend.loadedUris, isEmpty);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.windows),
+  );
+
   for (final configuration in [
     (size: const Size(1280, 720), scale: 1.0, direction: 1.0),
     (size: const Size(800, 600), scale: 2.0, direction: -1.0),
