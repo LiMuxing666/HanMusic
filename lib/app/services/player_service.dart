@@ -163,6 +163,13 @@ class PlayerService extends GetxService {
     return QueueAddResult.added;
   }
 
+  Future<void> clearQueue() async {
+    if (_disposed || queue.isEmpty) return;
+    queue.clear();
+    _failedIds.clear();
+    await _clearSelection();
+  }
+
   Future<void> playAt(int index) async {
     if (_disposed || index < 0 || index >= queue.length) return;
     _manualSelection(queue[index].id);

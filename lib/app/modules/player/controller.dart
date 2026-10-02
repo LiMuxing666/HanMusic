@@ -227,6 +227,11 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
   void reorderQueue(int oldIndex, int newIndex) =>
       _player.reorderQueue(oldIndex, newIndex);
   Future<void> removeFromQueue(String id) => _player.removeFromQueue(id);
+  Future<void> clearQueue() async {
+    if (_closed || _exitPending) return;
+    await _player.clearQueue();
+  }
+
   void cyclePlayMode() {
     final modes = PlayMode.values;
     _player.playMode.value =

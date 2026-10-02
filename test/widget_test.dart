@@ -1422,6 +1422,75 @@ void main() {
     );
   });
 
+  testWidgets(
+    'clear queue confirmation preserves cancellation and stops without deleting library',
+    (tester) async {
+      await _withPlayer(
+        tester,
+        withLibrary: true,
+        size: const Size(800, 600),
+        textScale: 2,
+        run: (fixture) async {
+          final songs = _librarySongs(3);
+          fixture.library!.replaceAll(songs);
+          await fixture.controller.playLibrarySong(songs.first);
+          await tester.pumpAndSettle();
+          await tester.tap(find.byKey(const Key('nav-2')));
+          await tester.pumpAndSettle();
+          final clear = find.byKey(const Key('queue-clear'));
+          final confirm = find.byKey(const Key('confirm-clear-queue'));
+          final pauseCalls = fixture.backend.pauseCalls;
+          final playCalls = fixture.backend.playCalls;
+          final loadCalls = fixture.backend.loadedUris.length;
+          expect(clear.hitTestable(), findsOneWidget);
+          expect(tester.widget<ButtonStyleButton>(clear).onPressed, isNotNull);
+          expect(fixture.player.isPlaying.value, isTrue);
+
+          await tester.tap(clear);
+          await tester.pumpAndSettle();
+          expect(find.byType(AlertDialog), findsOneWidget);
+          expect(confirm.hitTestable(), findsOneWidget);
+          expect(find.text('保留队列').hitTestable(), findsOneWidget);
+          expect(fixture.player.queue.toList(), songs);
+          expect(fixture.player.currentSong.value?.id, songs.first.id);
+          expect(fixture.player.isPlaying.value, isTrue);
+          expect(fixture.backend.pauseCalls, pauseCalls);
+          expect(tester.takeException(), isNull);
+          await tester.tap(find.text('保留队列'));
+          await tester.pumpAndSettle();
+          expect(find.byType(AlertDialog), findsNothing);
+          expect(fixture.player.queue.toList(), songs);
+          expect(fixture.player.currentSong.value?.id, songs.first.id);
+          expect(fixture.player.isPlaying.value, isTrue);
+          expect(fixture.backend.pauseCalls, pauseCalls);
+          expect(fixture.backend.playCalls, playCalls);
+
+          await tester.tap(clear);
+          await tester.pumpAndSettle();
+          await tester.tap(confirm);
+          await tester.pumpAndSettle();
+          expect(find.byType(AlertDialog), findsNothing);
+          expect(fixture.player.queue, isEmpty);
+          expect(fixture.player.currentSong.value, isNull);
+          expect(fixture.player.isPlaying.value, isFalse);
+          expect(fixture.library!.songs.toList(), songs);
+          expect(tester.widget<ButtonStyleButton>(clear).onPressed, isNull);
+          expect(find.text('队列还是空的，从曲库选择一首音乐开始。'), findsOneWidget);
+          expect(_playButton.hitTestable(), findsOneWidget);
+
+          fixture.backend.emitState(playing: false, completed: true);
+          await tester.pumpAndSettle();
+          expect(fixture.backend.playCalls, playCalls);
+          expect(fixture.backend.loadedUris, hasLength(loadCalls));
+          expect(fixture.player.queue, isEmpty);
+          expect(fixture.player.currentSong.value, isNull);
+          expect(fixture.player.isPlaying.value, isFalse);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+  );
+
   for (final configuration in [
     (size: const Size(1280, 720), scale: 1.0),
     (size: const Size(800, 600), scale: 2.0),

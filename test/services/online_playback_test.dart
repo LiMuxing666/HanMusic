@@ -162,6 +162,46 @@ void main() {
     expect(backend.playCalls, 0);
   });
 
+  for (final lateFailure in [true, false]) {
+    test('clearing queue bypasses pending resolution and ignores late '
+        '${lateFailure ? 'failure' : 'success'}', () async {
+      final gate = Completer<Uri>();
+      resolveAction = (_) => gate.future;
+      final opening = player.playQueue([a, b]);
+      await _settle();
+      expect(resolves, 1);
+      var cleared = false;
+      final clearing = player.clearQueue().then((_) {
+        cleared = true;
+      });
+      await _settle();
+      try {
+        expect(cleared, isTrue);
+        expect(gate.isCompleted, isFalse);
+        expect(player.queue, isEmpty);
+        expect(player.currentSong.value, isNull);
+        expect(player.isLoading.value, isFalse);
+        expect(player.canPlay, isFalse);
+        expect(backend.loadedUris, isEmpty);
+        expect(backend.playCalls, 0);
+      } finally {
+        if (lateFailure) {
+          gate.completeError(StateError('obsolete source resolution'));
+        } else {
+          gate.complete(streamFor(a, 1));
+        }
+        await Future.wait([opening, clearing]);
+      }
+      await _settle();
+      expect(player.queue, isEmpty);
+      expect(player.currentSong.value, isNull);
+      expect(player.isPlaying.value, isFalse);
+      expect(player.errorMessage.value, isNull);
+      expect(backend.loadedUris, isEmpty);
+      expect(backend.playCalls, 0);
+    });
+  }
+
   test('replacing a source still serializes native loads', () async {
     final nativeGate = backend.loadCompleter = Completer<Duration?>();
     final first = player.playQueue([a, b]);

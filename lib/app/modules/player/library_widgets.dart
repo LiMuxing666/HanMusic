@@ -902,6 +902,7 @@ class _QueueViewState extends State<_QueueView> {
   List<String>? _dragOrder;
   SliverReorderableListState? _reorderable;
   bool _queueCheckScheduled = false;
+  bool _clearPending = false;
 
   @override
   void initState() {
@@ -972,6 +973,38 @@ class _QueueViewState extends State<_QueueView> {
     }
   }
 
+  Future<void> _confirmClearQueue() async {
+    if (_clearPending || controller.queue.isEmpty) return;
+    _cancelDrag();
+    setState(() => _clearPending = true);
+    try {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('清空播放队列？'),
+          content: const Text(
+            '将停止播放并移除当前队列中的全部歌曲。曲库和音乐文件会保留。'
+            '播完当前曲目的定时将取消，倒计时定时继续。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('保留队列'),
+            ),
+            FilledButton(
+              key: const Key('confirm-clear-queue'),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('清空并停止'),
+            ),
+          ],
+        ),
+      );
+      if (mounted && confirmed == true) await controller.clearQueue();
+    } finally {
+      if (mounted) setState(() => _clearPending = false);
+    }
+  }
+
   @override
   void dispose() {
     _queueChanges.dispose();
@@ -997,6 +1030,15 @@ class _QueueViewState extends State<_QueueView> {
               key: const Key('skip-error-switch'),
               value: controller.skipOnError.value,
               onChanged: (value) => controller.skipOnError.value = value,
+            ),
+            const SizedBox(width: 8),
+            TextButton.icon(
+              key: const Key('queue-clear'),
+              onPressed: _clearPending || controller.queue.isEmpty
+                  ? null
+                  : _confirmClearQueue,
+              icon: const Icon(Icons.playlist_remove_rounded, size: 20),
+              label: Text(_clearPending ? '处理中…' : '清空队列'),
             ),
           ],
         ),

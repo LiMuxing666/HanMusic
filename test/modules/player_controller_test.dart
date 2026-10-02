@@ -354,6 +354,36 @@ void main() {
 
     tearDown(() => library.onClose());
 
+    test(
+      'clearing queue respects exit and preserves library and countdown',
+      () async {
+        library.replaceAll([song]);
+        await controller.playLibrarySong(song);
+        controller.startSleepTimerAfterCurrentSong();
+        controller.beginExit();
+        await controller.clearQueue();
+        expect(player.queue, [song]);
+        expect(player.isPlaying.value, isTrue);
+        expect(timer.mode.value, SleepTimerMode.endOfTrack);
+
+        controller.cancelExit();
+        await controller.clearQueue();
+        expect(player.queue, isEmpty);
+        expect(player.currentSong.value, isNull);
+        expect(player.isPlaying.value, isFalse);
+        expect(timer.mode.value, SleepTimerMode.off);
+        expect(library.songs, [song]);
+
+        await controller.playLibrarySong(song);
+        controller.startSleepTimer(const Duration(minutes: 15));
+        final deadline = timer.deadline.value;
+        await controller.clearQueue();
+        expect(timer.mode.value, SleepTimerMode.countdown);
+        expect(timer.deadline.value, deadline);
+        expect(library.songs, [song]);
+      },
+    );
+
     test('queue additions use current availability and stay paused', () {
       library.replaceAll([song.copyWith(isMissing: true)]);
       expect(controller.addToQueue(song), QueueAddResult.unavailable);

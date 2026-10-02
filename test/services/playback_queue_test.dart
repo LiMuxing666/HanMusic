@@ -5,6 +5,7 @@ import 'package:han_music/app/data/models/play_mode.dart';
 import 'package:han_music/app/data/models/queue_add_result.dart';
 import 'package:han_music/app/data/models/song.dart';
 import 'package:han_music/app/services/player_service.dart';
+import 'package:han_music/app/services/sleep_timer_coordinator.dart';
 import 'package:han_music/app/services/timer_service.dart';
 
 import '../support/fake_audio_backend.dart';
@@ -39,6 +40,7 @@ void main() {
     await player.playAt(-1);
     await player.playAt(0);
     await player.removeFromQueue('absent');
+    await player.clearQueue();
     player.reorderQueue(0, 1);
     await player.restoreQueue([]);
     await player.togglePlayback();
@@ -49,6 +51,7 @@ void main() {
     expect(backend.loadedUris, isEmpty);
     expect(player.addToQueue([]), QueueAddResult.unchanged);
     await player.shutdown();
+    await player.clearQueue();
     expect(player.addToQueue(songs), QueueAddResult.unavailable);
     expect(player.queue, isEmpty);
   });
@@ -210,6 +213,72 @@ void main() {
     expect(backend.loadedUris, isEmpty);
     await player.togglePlayback();
     expect(backend.loadedUris, [songs[0].uri]);
+  });
+
+  test(
+    'clearing a playing queue resets selection and preserves paused requeue and timer policy',
+    () async {
+      final timer = TimerService(
+        onExpired: player.pauseForSleepTimer,
+        now: () => DateTime.utc(2026, 10, 2),
+      );
+      final coordinator = SleepTimerCoordinator(player: player, timer: timer);
+      addTearDown(() {
+        coordinator.dispose();
+        timer.onClose();
+      });
+      await player.playQueue(songs);
+      backend.emitPosition(const Duration(seconds: 37));
+      timer.startEndOfTrack(songs.first.id);
+      final pauses = backend.pauseCalls;
+
+      final clearing = player.clearQueue();
+      expect(player.queue, isEmpty);
+      expect(player.currentSong.value, isNull);
+      expect(player.currentIndex, -1);
+      expect(player.position.value, Duration.zero);
+      expect(player.duration.value, Duration.zero);
+      expect(player.isPlaying.value, isFalse);
+      expect(player.canPlay, isFalse);
+      expect(timer.isActive, isFalse);
+      await clearing;
+      expect(backend.pauseCalls, pauses + 1);
+      expect(backend.playCalls, 1);
+
+      expect(player.addToQueue([songs[1]]), QueueAddResult.added);
+      expect(player.currentSong.value?.id, songs[1].id);
+      expect(player.isPlaying.value, isFalse);
+      expect(player.canPlay, isTrue);
+      expect(backend.loadedUris, [songs.first.uri]);
+      expect(backend.playCalls, 1);
+
+      timer.start(const Duration(minutes: 15));
+      final deadline = timer.deadline.value;
+      await player.clearQueue();
+      expect(timer.isActive, isTrue);
+      expect(timer.deadline.value, deadline);
+      expect(player.queue, isEmpty);
+      expect(player.isPlaying.value, isFalse);
+    },
+  );
+
+  test('clearing during native load prevents late autoplay', () async {
+    final gate = backend.loadCompleter = Completer<Duration?>();
+    final opening = player.playQueue(songs);
+    await _settle();
+    expect(backend.loadedUris, [songs.first.uri]);
+
+    final clearing = player.clearQueue();
+    expect(player.queue, isEmpty);
+    expect(player.currentSong.value, isNull);
+    gate.complete(const Duration(minutes: 3));
+    await Future.wait([opening, clearing]);
+    expect(backend.playCalls, 0);
+    expect(player.isPlaying.value, isFalse);
+    expect(player.isLoading.value, isFalse);
+    expect(player.canPlay, isFalse);
+    expect(player.position.value, Duration.zero);
+    expect(player.duration.value, Duration.zero);
   });
 
   test(
