@@ -25,6 +25,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-HanMusic.ps1 -Da
 
 主要按钮支持 Tab / Shift+Tab 切换焦点，Enter 或 Space 激活。曲库歌曲行获得焦点后可连续使用 PageDown / PageUp 翻页；Tab 可离开列表进入固定播放条，播放按钮获得焦点时 Space 切换播放/暂停。队列的“上移 / 下移”按钮也可通过键盘操作。
 
+在本地曲库或在线音乐页面按 Ctrl+F 可聚焦搜索框并选中已有关键词；搜索框内按 Esc 或点击右侧清空按钮清除搜索。本地会恢复完整列表，在线会取消待处理搜索并清空结果。打开定时或音乐源等弹窗时，Ctrl+F 不会把焦点抢回主页面。
+
 ## 运行条件与故障排查
 
 - 本机已验证 Windows 11 x64 Build 26200；Windows 10、ARM64 和未安装开发工具的干净系统尚未完成实测。

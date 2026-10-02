@@ -7,6 +7,7 @@ import 'package:get/get.dart';
 import 'controller.dart';
 import '../online/controller.dart';
 import '../online/view.dart';
+import '../shared/music_search_field.dart';
 import '../../data/models/song.dart';
 import '../../data/models/play_mode.dart';
 import '../../data/models/sleep_timer_mode.dart';

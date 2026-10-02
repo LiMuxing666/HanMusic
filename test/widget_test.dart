@@ -1214,6 +1214,83 @@ void main() {
     );
   }
 
+  testWidgets(
+    'library search supports find clear external updates and modal focus',
+    (tester) async {
+      await _withPlayer(
+        tester,
+        withLibrary: true,
+        run: (fixture) async {
+          fixture.library!.replaceAll(_librarySongs(3));
+          fixture.controller.searchQuery.value = '专辑 00001';
+          await tester.pumpAndSettle();
+          final search = find.byKey(const Key('library-search'));
+          final editable = find.descendant(
+            of: search,
+            matching: find.byType(EditableText),
+          );
+          final input = tester.widget<EditableText>(editable);
+          expect(input.controller.text, '专辑 00001');
+          expect(find.text('测试曲目 00001'), findsOneWidget);
+          expect(find.text('测试曲目 00000'), findsNothing);
+
+          // Ctrl+F also works before any input has been focused.
+          await _sendFindShortcut(tester);
+          expect(input.focusNode.hasFocus, isTrue);
+          FocusManager.instance.primaryFocus?.unfocus();
+          await tester.pump();
+          await _sendFindShortcut(tester);
+          expect(input.focusNode.hasFocus, isTrue);
+          expect(
+            input.controller.selection,
+            const TextSelection(baseOffset: 0, extentOffset: 8),
+          );
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+          await tester.pumpAndSettle();
+          expect(fixture.controller.searchQuery.value, isEmpty);
+          expect(input.controller.text, isEmpty);
+          expect(find.text('测试曲目 00000'), findsOneWidget);
+
+          await tester.enterText(search, '00002');
+          await tester.pumpAndSettle();
+          await tester.tap(find.byKey(const Key('library-search-clear')));
+          await tester.pumpAndSettle();
+          expect(fixture.controller.searchQuery.value, isEmpty);
+          expect(input.controller.text, isEmpty);
+          expect(find.byKey(const Key('library-search-clear')), findsNothing);
+
+          fixture.controller.setSearchQuery('00001');
+          await tester.pumpAndSettle();
+          expect(input.controller.text, '00001');
+          await _tabToQueueControl(tester, _timerButton);
+          await _sendFindShortcut(tester);
+          expect(input.focusNode.hasFocus, isTrue);
+          expect(
+            input.controller.selection,
+            const TextSelection(baseOffset: 0, extentOffset: 5),
+          );
+          await tester.tap(_timerButton);
+          await tester.pumpAndSettle();
+          final minutes = find.byKey(const Key('sleep-timer-minutes'));
+          await tester.ensureVisible(minutes);
+          await tester.enterText(minutes, '17');
+          final dialogInput = tester.widget<EditableText>(
+            find.descendant(of: minutes, matching: find.byType(EditableText)),
+          );
+          await _sendFindShortcut(tester);
+          expect(dialogInput.focusNode.hasFocus, isTrue);
+          expect(input.focusNode.hasFocus, isFalse);
+          expect(dialogInput.controller.text, '17');
+          expect(fixture.controller.searchQuery.value, '00001');
+          await tester.tap(find.text('暂不设置'));
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.windows),
+  );
+
   testWidgets('ten thousand songs are virtualized and searchable by metadata', (
     tester,
   ) async {
@@ -2248,6 +2325,13 @@ class _PagePixels {
     }
     return changed;
   }
+}
+
+Future<void> _sendFindShortcut(WidgetTester tester) async {
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+  await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  await tester.pump();
 }
 
 Future<void> _withPlayer(

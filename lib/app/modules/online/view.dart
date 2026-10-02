@@ -1,25 +1,55 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import '../../data/models/online_source_config.dart';
 import '../../data/models/song.dart';
+import '../shared/music_search_field.dart';
 import 'controller.dart';
 
 const _green = Color(0xFF256747);
 const _muted = Color(0xFF738077);
 
-class OnlineMusicPage extends StatelessWidget {
-  const OnlineMusicPage({super.key, required this.controller});
+class OnlineMusicPage extends StatefulWidget {
+  const OnlineMusicPage({
+    super.key,
+    required this.controller,
+    this.searchFieldKey,
+  });
   final OnlineMusicController controller;
+  final GlobalKey<MusicSearchFieldState>? searchFieldKey;
 
   @override
-  Widget build(BuildContext context) => CustomScrollView(
-    slivers: [
-      // Controls and notices can exceed the space above the fixed transport at
-      // large text sizes. Keep them in the same scrollable as the lazy results.
-      SliverToBoxAdapter(child: _buildControls(context)),
-      Obx(_buildResults),
-    ],
+  State<OnlineMusicPage> createState() => _OnlineMusicPageState();
+}
+
+class _OnlineMusicPageState extends State<OnlineMusicPage> {
+  final _localSearchKey = GlobalKey<MusicSearchFieldState>();
+  GlobalKey<MusicSearchFieldState> get _searchKey =>
+      widget.searchFieldKey ?? _localSearchKey;
+  OnlineMusicController get controller => widget.controller;
+
+  @override
+  Widget build(BuildContext context) => CallbackShortcuts(
+    bindings: {
+      const SingleActivator(LogicalKeyboardKey.keyF, control: true): () {
+        if (ModalRoute.of(context)?.isCurrent != false) {
+          _searchKey.currentState?.focusAndSelect();
+        }
+      },
+    },
+    child: Focus(
+      autofocus: true,
+      skipTraversal: true,
+      child: CustomScrollView(
+        slivers: [
+          // Controls and notices can exceed the space above the fixed transport at
+          // large text sizes. Keep them in the same scrollable as the lazy results.
+          SliverToBoxAdapter(child: _buildControls(context)),
+          Obx(_buildResults),
+        ],
+      ),
+    ),
   );
 
   Widget _buildControls(BuildContext context) => Column(
@@ -128,17 +158,13 @@ class OnlineMusicPage extends StatelessWidget {
         () => Row(
           children: [
             Expanded(
-              child: TextFormField(
-                key: const Key('online-query'),
-                initialValue: controller.service.query.value,
+              child: MusicSearchField(
+                key: _searchKey,
+                inputKey: const ValueKey('online-query'),
+                query: controller.service.query.value,
                 enabled: controller.service.selectedSource != null,
                 onChanged: controller.setQuery,
-                onFieldSubmitted: (_) => controller.searchNow(),
-                decoration: const InputDecoration(
-                  hintText: '搜索歌曲、歌手或专辑',
-                  prefixIcon: Icon(Icons.search_rounded),
-                  isDense: true,
-                ),
+                onSubmitted: (_) => controller.searchNow(),
               ),
             ),
             const SizedBox(width: 10),

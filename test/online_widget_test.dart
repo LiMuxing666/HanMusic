@@ -407,6 +407,77 @@ void main() {
   );
 
   testWidgets(
+    'online search supports find clear external updates and stale cancellation',
+    (tester) async {
+      await _withOnline(
+        tester,
+        run: (fixture) async {
+          final query = find.byKey(const Key('online-query'));
+          final editable = find.descendant(
+            of: query,
+            matching: find.byType(EditableText),
+          );
+          final input = tester.widget<EditableText>(editable);
+          fixture.online.query.value = '外部关键词';
+          await tester.pumpAndSettle();
+          expect(input.controller.text, '外部关键词');
+          FocusManager.instance.primaryFocus?.unfocus();
+          await tester.pump();
+          await _sendFindShortcut(tester);
+          expect(input.focusNode.hasFocus, isTrue);
+          expect(
+            input.controller.selection,
+            const TextSelection(baseOffset: 0, extentOffset: 5),
+          );
+
+          final gate = Completer<OnlineSearchPage>();
+          fixture.repository.gates['等待清空'] = gate;
+          await tester.enterText(query, '等待清空');
+          await tester.pump(const Duration(milliseconds: 500));
+          try {
+            expect(fixture.repository.requests.single.query, '等待清空');
+            expect(fixture.online.isSearching.value, isTrue);
+            await tester.tap(find.byKey(const Key('online-query-clear')));
+            await tester.pump();
+            expect(fixture.online.query.value, isEmpty);
+            expect(input.controller.text, isEmpty);
+            expect(fixture.online.isSearching.value, isFalse);
+            expect(fixture.online.results, isEmpty);
+          } finally {
+            gate.complete(
+              OnlineSearchPage(
+                songs: [
+                  Song.online(
+                    sourceId: 'demo',
+                    trackId: 'cleared',
+                    title: '清空后不应恢复的结果',
+                  ),
+                ],
+                hasMore: false,
+              ),
+            );
+            await tester.pumpAndSettle();
+          }
+          expect(find.text('清空后不应恢复的结果'), findsNothing);
+          expect(fixture.online.results, isEmpty);
+          expect(find.byKey(const Key('online-query-clear')), findsNothing);
+
+          await tester.enterText(query, '尚未发出的查询');
+          await tester.pump();
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+          await tester.pump(const Duration(milliseconds: 600));
+          await tester.pumpAndSettle();
+          expect(fixture.online.query.value, isEmpty);
+          expect(input.controller.text, isEmpty);
+          expect(fixture.repository.requests, hasLength(1));
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.windows),
+  );
+
+  testWidgets(
     'search debounces 500 ms and stale response never replaces new results',
     (tester) async {
       await _withOnline(
@@ -564,6 +635,13 @@ void main() {
 }
 
 final _play = find.byKey(const Key('toggle-playback'));
+
+Future<void> _sendFindShortcut(WidgetTester tester) async {
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+  await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+  await tester.pump();
+}
 
 Future<void> _tabTo(WidgetTester tester, Finder target) async {
   for (var step = 0; step < 50; step++) {

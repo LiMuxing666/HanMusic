@@ -16,6 +16,8 @@ class _LibraryPlayerPage extends StatefulWidget {
 
 class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
   int _section = 0;
+  final _librarySearchKey = GlobalKey<MusicSearchFieldState>();
+  final _onlineSearchKey = GlobalKey<MusicSearchFieldState>();
   PlayerController get controller => widget.controller;
   OnlineMusicController? _online;
 
@@ -39,88 +41,108 @@ class _LibraryPlayerPageState extends State<_LibraryPlayerPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(
-      child: LayoutBuilder(
-        builder: (context, bounds) {
-          final compact = bounds.maxWidth < 1100;
-          return Row(
-            children: [
-              _LibraryNavigation(
-                compact: compact,
-                selected: _section,
-                showOnline: _online != null,
-                onSelected: (value) => setState(() => _section = value),
-              ),
-              Expanded(
-                child: Column(
-                  children: [
-                    Expanded(
-                      child: Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          compact ? 18 : 28,
-                          20,
-                          compact ? 18 : 28,
-                          0,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            if (_section != 3)
-                              _LibraryHeader(
-                                controller: controller,
-                                section: _section,
-                              ),
-                            const SizedBox(height: 14),
-                            Obx(() {
-                              final error = controller.errorMessage.value;
-                              if (error == null || error.isEmpty) {
-                                return const SizedBox.shrink();
-                              }
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: _ErrorNotice(
-                                  message: error,
-                                  onDismiss: controller.dismissError,
-                                ),
-                              );
-                            }),
-                            Expanded(
-                              child: switch (_section) {
-                                1 => SingleChildScrollView(
-                                  child: Column(
-                                    children: [
-                                      _SongCard(controller: controller),
-                                      const SizedBox(height: 16),
-                                      _SleepTimerCard(controller: controller),
-                                      const SizedBox(height: 20),
-                                    ],
-                                  ),
-                                ),
-                                2 => _QueueView(
-                                  key: ObjectKey(controller),
-                                  controller: controller,
-                                ),
-                                3 => OnlineMusicPage(controller: _online!),
-                                _ => _LibraryView(
-                                  controller: controller,
-                                  scrollController:
-                                      widget.libraryScrollController,
-                                  rowDiagnostics: widget.libraryRowDiagnostics,
-                                ),
-                              },
+  Widget build(BuildContext context) => CallbackShortcuts(
+    bindings: {
+      const SingleActivator(LogicalKeyboardKey.keyF, control: true): () {
+        if (ModalRoute.of(context)?.isCurrent == false) return;
+        if (_section == 0) _librarySearchKey.currentState?.focusAndSelect();
+        if (_section == 3) _onlineSearchKey.currentState?.focusAndSelect();
+      },
+    },
+    child: FocusScope(
+      autofocus: true,
+      skipTraversal: true,
+      child: Scaffold(
+        body: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, bounds) {
+              final compact = bounds.maxWidth < 1100;
+              return Row(
+                children: [
+                  _LibraryNavigation(
+                    compact: compact,
+                    selected: _section,
+                    showOnline: _online != null,
+                    onSelected: (value) => setState(() => _section = value),
+                  ),
+                  Expanded(
+                    child: Column(
+                      children: [
+                        Expanded(
+                          child: Padding(
+                            padding: EdgeInsets.fromLTRB(
+                              compact ? 18 : 28,
+                              20,
+                              compact ? 18 : 28,
+                              0,
                             ),
-                          ],
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                if (_section != 3)
+                                  _LibraryHeader(
+                                    controller: controller,
+                                    section: _section,
+                                  ),
+                                const SizedBox(height: 14),
+                                Obx(() {
+                                  final error = controller.errorMessage.value;
+                                  if (error == null || error.isEmpty) {
+                                    return const SizedBox.shrink();
+                                  }
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: _ErrorNotice(
+                                      message: error,
+                                      onDismiss: controller.dismissError,
+                                    ),
+                                  );
+                                }),
+                                Expanded(
+                                  child: switch (_section) {
+                                    1 => SingleChildScrollView(
+                                      child: Column(
+                                        children: [
+                                          _SongCard(controller: controller),
+                                          const SizedBox(height: 16),
+                                          _SleepTimerCard(
+                                            controller: controller,
+                                          ),
+                                          const SizedBox(height: 20),
+                                        ],
+                                      ),
+                                    ),
+                                    2 => _QueueView(
+                                      key: ObjectKey(controller),
+                                      controller: controller,
+                                    ),
+                                    3 => OnlineMusicPage(
+                                      controller: _online!,
+                                      searchFieldKey: _onlineSearchKey,
+                                    ),
+                                    _ => _LibraryView(
+                                      controller: controller,
+                                      searchFieldKey: _librarySearchKey,
+                                      scrollController:
+                                          widget.libraryScrollController,
+                                      rowDiagnostics:
+                                          widget.libraryRowDiagnostics,
+                                    ),
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
-                      ),
+                        _DesktopTransport(controller: controller),
+                      ],
                     ),
-                    _DesktopTransport(controller: controller),
-                  ],
-                ),
-              ),
-            ],
-          );
-        },
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
       ),
     ),
   );
@@ -316,25 +338,24 @@ class _LibraryHeader extends StatelessWidget {
 class _LibraryView extends StatelessWidget {
   const _LibraryView({
     required this.controller,
+    required this.searchFieldKey,
     this.scrollController,
     this.rowDiagnostics,
   });
   final PlayerController controller;
+  final GlobalKey<MusicSearchFieldState> searchFieldKey;
   final ScrollController? scrollController;
   final LibraryRowLifecycleDiagnostics? rowDiagnostics;
 
   @override
   Widget build(BuildContext context) => Column(
     children: [
-      TextFormField(
-        key: const Key('library-search'),
-        initialValue: controller.searchQuery.value,
-        onChanged: controller.setSearchQuery,
-        decoration: const InputDecoration(
-          hintText: '搜索歌曲、歌手或专辑',
-          prefixIcon: Icon(Icons.search_rounded),
-          isDense: true,
-          contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+      Obx(
+        () => MusicSearchField(
+          key: searchFieldKey,
+          inputKey: const ValueKey('library-search'),
+          query: controller.searchQuery.value,
+          onChanged: controller.setSearchQuery,
         ),
       ),
       const SizedBox(height: 10),
