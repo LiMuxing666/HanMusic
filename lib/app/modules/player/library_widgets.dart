@@ -545,7 +545,7 @@ class _LibrarySongRow extends StatelessWidget {
                           style: TextStyle(
                             fontWeight: current
                                 ? FontWeight.w700
-                                : FontWeight.w500,
+                                : FontWeight.w400,
                             color: current ? _green : null,
                           ),
                         ),

@@ -12,6 +12,10 @@ class HanMusicTheme {
     );
     return ThemeData(
       useMaterial3: true,
+      // Use one Windows UI family for Latin and Han text instead of relying
+      // on the default font's per-glyph Chinese fallback.
+      fontFamily: 'Microsoft YaHei UI',
+      fontFamilyFallback: const ['Microsoft YaHei', 'DengXian'],
       colorScheme: scheme.copyWith(primary: primary),
       scaffoldBackgroundColor: const Color(0xFFF5F7F3),
       textTheme:
