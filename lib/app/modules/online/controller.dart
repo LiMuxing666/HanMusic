@@ -19,8 +19,10 @@ class OnlineMusicController extends GetxController {
   final void Function(Song song) _enqueueSong;
   final actionError = RxnString();
   final isOpening = false.obs;
+  final openingSongId = RxnString();
   final isSaving = false.obs;
   bool _closed = false;
+  int _openingSerial = 0;
 
   void setQuery(String query) => service.setQuery(query);
   Future<void> searchNow() => service.searchNow();
@@ -29,12 +31,18 @@ class OnlineMusicController extends GetxController {
   Future<void> selectSource(String? id) => service.selectSource(id);
 
   Future<void> play(Song song) async {
-    if (_closed || isOpening.value) return;
+    if (_closed || (isOpening.value && openingSongId.value == song.id)) return;
+    final serial = ++_openingSerial;
+    openingSongId.value = song.id;
     isOpening.value = true;
     try {
       await _playSong(song);
     } finally {
-      if (!_closed) isOpening.value = false;
+      // Superseded work must not unlock a newer song that is still loading.
+      if (!_closed && serial == _openingSerial) {
+        isOpening.value = false;
+        openingSongId.value = null;
+      }
     }
   }
 

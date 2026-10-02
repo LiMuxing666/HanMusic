@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -158,6 +159,75 @@ void main() {
     expect(service.selectedSourceId.value, 'demo');
     expect(controller.actionError.value, contains('已保存，但未能切换'));
   });
+
+  for (final lateFailure in [false, true]) {
+    test('online opening keeps the latest selection busy after an older '
+        '${lateFailure ? 'failure' : 'success'}', () async {
+      final a = Song.online(sourceId: 'demo', trackId: 'a', title: '歌曲 A');
+      final b = Song.online(sourceId: 'demo', trackId: 'b', title: '歌曲 B');
+      final firstGate = Completer<void>();
+      final secondGate = Completer<void>();
+      final staleError = StateError('Old selection failed');
+      Object? firstError;
+      controller.onClose();
+      controller = OnlineMusicController(
+        service: service,
+        playSong: (song) {
+          played.add(song);
+          return song.id == a.id ? firstGate.future : secondGate.future;
+        },
+        enqueueSong: enqueued.add,
+      );
+      final pending = <Future<void>>[];
+      try {
+        pending.add(
+          controller.play(a).catchError((Object error) {
+            firstError = error;
+          }),
+        );
+        expect(controller.isOpening.value, isTrue);
+        expect(controller.openingSongId.value, a.id);
+
+        pending.add(controller.play(b));
+        expect(played, [a, b]);
+        expect(controller.isOpening.value, isTrue);
+        expect(controller.openingSongId.value, b.id);
+        var duplicateReturned = false;
+        pending.add(
+          controller.play(b).then((_) {
+            duplicateReturned = true;
+          }),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(duplicateReturned, isTrue);
+        expect(played, [a, b]);
+
+        if (lateFailure) {
+          firstGate.completeError(staleError);
+        } else {
+          firstGate.complete();
+        }
+        await pending.first;
+        expect(firstError, lateFailure ? same(staleError) : isNull);
+        expect(secondGate.isCompleted, isFalse);
+        expect(controller.isOpening.value, isTrue);
+        expect(controller.openingSongId.value, b.id);
+
+        secondGate.complete();
+        await pending[1];
+        expect(controller.isOpening.value, isFalse);
+        expect(controller.openingSongId.value, isNull);
+        controller.onClose();
+        await controller.play(a);
+        await controller.play(b);
+        expect(played, [a, b]);
+      } finally {
+        if (!firstGate.isCompleted) firstGate.complete();
+        if (!secondGate.isCompleted) secondGate.complete();
+        await Future.wait(pending);
+      }
+    });
+  }
 
   test(
     'play and enqueue preserve stable song identity and stop after disposal',

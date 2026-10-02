@@ -242,7 +242,7 @@ class _OnlineMusicPageState extends State<OnlineMusicPage> {
     final service = controller.service;
     final results = service.results.toList();
     final selected = service.selectedSource;
-    final opening = controller.isOpening.value;
+    final openingId = controller.openingSongId.value;
     final loadingMore = service.isLoadingMore.value;
     final hasMore = service.hasMore.value;
     if (selected == null) {
@@ -326,7 +326,7 @@ class _OnlineMusicPageState extends State<OnlineMusicPage> {
             return _OnlineSongRow(
               song: song,
               sourceName: selected.name,
-              onPlay: opening ? null : () => controller.play(song),
+              onPlay: openingId == song.id ? null : () => controller.play(song),
               onQueue: () => controller.enqueue(song),
             );
           },

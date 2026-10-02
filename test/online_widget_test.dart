@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:han_music/app/core/theme/app_theme.dart';
+import 'package:han_music/app/data/models/online_source_config.dart';
 import 'package:han_music/app/data/models/song.dart';
 import 'package:han_music/app/data/repositories/local_library_repository.dart';
 import 'package:han_music/app/data/repositories/local_song_picker.dart';
@@ -563,6 +565,124 @@ void main() {
     },
   );
 
+  for (final keyboard in [false, true]) {
+    testWidgets(
+      'online opening allows ${keyboard ? "keyboard" : "mouse"} selection while another song resolves',
+      (tester) async {
+        final repository = _GatedPlaybackRepository();
+        await _withOnline(
+          tester,
+          repository: repository,
+          size: keyboard ? const Size(1280, 720) : const Size(800, 600),
+          scale: keyboard ? 1 : 2,
+          run: (fixture) async {
+            final songs = [
+              Song.online(sourceId: 'demo', trackId: 'slow', title: '等待解析的 A'),
+              Song.online(sourceId: 'demo', trackId: 'fast', title: '先播放的 B'),
+            ];
+            final slowUri = Uri.parse('https://media.example.test/slow.mp3');
+            final fastUri = Uri.parse('https://media.example.test/fast.mp3');
+            repository.songsFor = (_, _, _) => songs;
+            try {
+              await tester.enterText(
+                find.byKey(const Key('online-query')),
+                '切换播放',
+              );
+              await tester.pump(const Duration(milliseconds: 500));
+              await tester.pumpAndSettle();
+              final slowRow = find.byKey(
+                ValueKey('online-song-${songs[0].id}'),
+              );
+              final fastRow = find.byKey(
+                ValueKey('online-song-${songs[1].id}'),
+              );
+              final slowPlay = find.ancestor(
+                of: find.byTooltip('播放${songs[0].title}'),
+                matching: find.byType(IconButton),
+              );
+              final fastPlay = find.ancestor(
+                of: find.byTooltip('播放${songs[1].title}'),
+                matching: find.byType(IconButton),
+              );
+              final scrollable = find
+                  .descendant(
+                    of: find.byType(CustomScrollView),
+                    matching: find.byType(Scrollable),
+                  )
+                  .first;
+              await tester.scrollUntilVisible(
+                slowRow,
+                100,
+                scrollable: scrollable,
+              );
+              await tester.pumpAndSettle();
+              if (keyboard) {
+                await _tabTo(tester, slowPlay);
+                await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+              } else {
+                await tester.tap(slowRow, kind: PointerDeviceKind.mouse);
+              }
+              await tester.pump();
+              expect(repository.resolvedTrackIds, ['slow']);
+              expect(repository.slowResolve.isCompleted, isFalse);
+              expect(fixture.player.currentSong.value?.id, songs[0].id);
+              expect(fixture.player.isLoading.value, isTrue);
+              expect(tester.widget<InkWell>(slowRow).onTap, isNull);
+              expect(tester.widget<IconButton>(slowPlay).onPressed, isNull);
+              await tester.tap(slowRow, kind: PointerDeviceKind.mouse);
+              await tester.pump();
+              expect(repository.resolvedTrackIds, ['slow']);
+              expect(fixture.backend.loadedUris, isEmpty);
+
+              await tester.scrollUntilVisible(
+                fastRow,
+                100,
+                scrollable: scrollable,
+              );
+              await tester.pump();
+              expect(tester.widget<InkWell>(fastRow).onTap, isNotNull);
+              expect(tester.widget<IconButton>(fastPlay).onPressed, isNotNull);
+              expect(fastPlay.hitTestable(), findsOneWidget);
+              if (keyboard) {
+                await _tabTo(tester, fastPlay, settle: false);
+                await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+              } else {
+                await tester.tap(fastRow, kind: PointerDeviceKind.mouse);
+              }
+              await tester.pumpAndSettle();
+              expect(repository.slowResolve.isCompleted, isFalse);
+              expect(repository.resolvedTrackIds, ['slow', 'fast']);
+              expect(fixture.player.currentSong.value?.id, songs[1].id);
+              expect(fixture.player.isLoading.value, isFalse);
+              expect(fixture.player.isPlaying.value, isTrue);
+              expect(fixture.player.queue.toList(), songs);
+              expect(fixture.backend.loadedUris, [fastUri]);
+              expect(fixture.backend.playCalls, 1);
+              expect(_play.hitTestable(), findsOneWidget);
+              expect(tester.takeException(), isNull);
+
+              repository.slowResolve.complete(slowUri);
+              await tester.pumpAndSettle();
+              expect(fixture.player.currentSong.value?.id, songs[1].id);
+              expect(fixture.player.isPlaying.value, isTrue);
+              expect(fixture.player.queue.toList(), songs);
+              expect(fixture.backend.loadedUris, [fastUri]);
+              expect(fixture.backend.playCalls, 1);
+              expect(fixture.player.errorMessage.value, isNull);
+              expect(tester.takeException(), isNull);
+            } finally {
+              if (!repository.slowResolve.isCompleted) {
+                repository.slowResolve.complete(slowUri);
+              }
+              await tester.pumpAndSettle();
+            }
+          },
+        );
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+    );
+  }
+
   testWidgets(
     'online queue feedback replaces duplicates and opens queue without playback',
     (tester) async {
@@ -702,7 +822,11 @@ Future<void> _sendFindShortcut(WidgetTester tester) async {
   await tester.pump();
 }
 
-Future<void> _tabTo(WidgetTester tester, Finder target) async {
+Future<void> _tabTo(
+  WidgetTester tester,
+  Finder target, {
+  bool settle = true,
+}) async {
   for (var step = 0; step < 50; step++) {
     final elements = target.evaluate().toSet();
     final focused = FocusManager.instance.primaryFocus?.context;
@@ -715,7 +839,11 @@ Future<void> _tabTo(WidgetTester tester, Finder target) async {
       if (within) return;
     }
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
-    await tester.pumpAndSettle();
+    if (settle) {
+      await tester.pumpAndSettle();
+    } else {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
   }
   fail('Keyboard traversal did not reach $target');
 }
@@ -759,12 +887,13 @@ Future<void> _withOnline(
   bool empty = false,
   Size size = const Size(1280, 720),
   double scale = 1,
+  FakeOnlineMusicRepository? repository,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
-  final fixture = _Fixture(empty: empty);
+  final fixture = _Fixture(empty: empty, repository: repository);
   await fixture.online.initialize();
   fixture.controller.onInit();
   try {
@@ -796,12 +925,13 @@ Future<void> _withOnline(
 }
 
 class _Fixture {
-  _Fixture({required bool empty}) {
+  _Fixture({required bool empty, FakeOnlineMusicRepository? repository})
+    : repository = repository ?? FakeOnlineMusicRepository() {
     store = MemoryOnlineSourceStore(
       sources: empty ? [] : [onlineTestSource()],
       selected: empty ? null : 'demo',
     );
-    online = OnlineMusicService(repository: repository, store: store);
+    online = OnlineMusicService(repository: this.repository, store: store);
     player = PlayerService(backend, resolver: online.resolveForPlayback);
     timer = TimerService(onExpired: player.pause);
     controller = PlayerController(
@@ -812,7 +942,7 @@ class _Fixture {
       online: online,
     );
   }
-  final repository = FakeOnlineMusicRepository();
+  final FakeOnlineMusicRepository repository;
   final backend = FakeAudioBackend();
   final library = LibraryService(
     repository: LocalLibraryRepository(
@@ -824,6 +954,22 @@ class _Fixture {
   late final PlayerService player;
   late final TimerService timer;
   late final PlayerController controller;
+}
+
+class _GatedPlaybackRepository extends FakeOnlineMusicRepository {
+  final slowResolve = Completer<Uri>();
+  final resolvedTrackIds = <String>[];
+
+  @override
+  Future<Uri> resolve(
+    OnlineSourceConfig source,
+    String trackId, {
+    OnlineRequestCancellation? cancellation,
+  }) async {
+    resolvedTrackIds.add(trackId);
+    if (trackId == 'slow') return slowResolve.future;
+    return Uri.parse('https://media.example.test/$trackId.mp3');
+  }
 }
 
 class _NoPicker implements SongPicker {
