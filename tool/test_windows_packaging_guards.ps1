@@ -110,6 +110,20 @@ $futureVersion = '0.1.0-dev.99+99'
 [IO.File]::WriteAllText((Join-Path $guideFixture 'pubspec.yaml'), "version: $futureVersion`n")
 $guidePath = (Get-ChildItem -LiteralPath (Join-Path $guideFixture 'doc') -Filter '12-Windows*.md' -File).FullName
 $originalGuide = [IO.File]::ReadAllText($guidePath)
+foreach ($newline in @("`n", "`r`n")) {
+    $normalizedGuide = $originalGuide.Replace("`r`n", "`n").Replace("`n", $newline)
+    [IO.File]::WriteAllText($guidePath, $normalizedGuide)
+    $newlineInspection = (& $packager -ProjectDirectory $guideFixture -OutputRoot $scratch -PackageName 'readme-newline-inspection' -ValidateDocumentationOnly) | ConvertFrom-Json
+    $expectedLines = @($normalizedGuide.Split([string[]]@($newline), [StringSplitOptions]::None) | ForEach-Object {
+        $markerIndex = $_.IndexOf('<!-- HANMUSIC_PACKAGE_VERSION -->', [StringComparison]::Ordinal)
+        if ($markerIndex -ge 0) { $_.Substring(0, $markerIndex) + "**$futureVersion**" } else { $_ }
+    })
+    $expectedReadme = $expectedLines -join $newline
+    if ($newlineInspection.readme -cne $expectedReadme) {
+        throw 'README version rendering changed its original LF or CRLF line endings.'
+    }
+}
+[IO.File]::WriteAllText($guidePath, $originalGuide)
 $inspection = (& $packager -ProjectDirectory $guideFixture -OutputRoot $scratch -PackageName 'readme-inspection' -ValidateDocumentationOnly) | ConvertFrom-Json
 if ($inspection.version -cne $futureVersion -or
     $inspection.readme -cnotmatch [regex]::Escape("**$futureVersion**") -or
@@ -136,4 +150,4 @@ $rejected = $false
 try { & $packager -ProjectDirectory $guideFixture -OutputRoot $scratch -PackageName 'readme-inspection' -ValidateDocumentationOnly | Out-Null }
 catch { if ($_.Exception.Message -notlike '*unshipped repository-local link*') { throw }; $rejected = $true }
 if (-not $rejected) { throw 'An unshipped audit link was accepted.' }
-Write-Output '19 packaging guard checks passed; README version and links, audit links, external marker, existing preview and build executable preserved.'
+Write-Output '21 packaging guard checks passed; LF/CRLF README version and links, audit links, external marker, existing preview and build executable preserved.'

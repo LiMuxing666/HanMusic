@@ -58,7 +58,7 @@ if ($guideText.IndexOf($guideMarker, [StringComparison]::Ordinal) -lt 0 -or
     $guideText.LastIndexOf($guideMarker, [StringComparison]::Ordinal)) {
     throw 'Preview guide must contain exactly one version insertion marker.'
 }
-$guideVersionLine = [regex]::Match($guideText, '(?m)^[^\r\n]*' + [regex]::Escape($guideMarker) + '[^\r\n]*$')
+$guideVersionLine = [regex]::Match($guideText, '(?m)^[^\r\n]*' + [regex]::Escape($guideMarker) + '[^\r\n]*(?=\r?$)')
 if (-not $guideVersionLine.Success) { throw 'Preview guide version marker must be on one line.' }
 $versionPrefix = $guideVersionLine.Value.Substring(0,
     $guideVersionLine.Value.IndexOf($guideMarker, [StringComparison]::Ordinal))
