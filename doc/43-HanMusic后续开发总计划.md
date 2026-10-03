@@ -83,11 +83,17 @@ G. 工程治理（与 A 并行，不改行为）
 
 - [x] 宣布功能冻结：在 05 顶部标注“M5 冻结，自 dev.26 起仅接受缺陷修复与发行材料”。
 - [x] 本机串行跑全量：`flutter analyze --no-pub lib test tool` 与 `flutter test --no-pub`。408/408 通过，失败 0、跳过 0；全量分析无问题。
-- [ ] 若发现并行执行下的时序敏感测试（dev.15 曾出现 4 项），定位到具体等待逻辑并修正为确定性等待，而不是默认串行掩盖。
+- [x] 本轮默认并发全量测试未出现时序敏感失败。首次 CI 的 6 项失败均为退出测试夹具依赖未创建的本机临时目录；已改用系统临时目录并在独立临时根目录中复测 6/6 通过，没有通过串行或跳过测试掩盖问题。
 - [ ] 建立 CI（GitHub Actions，`windows-latest`）：`flutter pub get --enforce-lockfile` → analyze → `dart format --set-exit-if-changed` → 全量测试 → `flutter build windows --release`。固定 Flutter 3.41.9；`PUB_HOSTED_URL` 与锁文件一致。CI 不产出发布包，只做门禁。
-- [ ] 产出 `0.1.0-rc.1`（即 dev.27），作为后续所有人工验收的唯一被测包。
+- [x] 产出 `0.1.0-rc.1+27`（原 dev.27 序号），通过 6 项开发机包检查，作为后续所有人工验收的唯一被测包。
 
-执行进度（2026-10-03）：本机分析与测试按顺序执行。全量测试保留默认并发，没有发现时序失败；分析耗时 163.4 秒，测试报告耗时 72.876 秒。`dart format --output=none --set-exit-if-changed lib test tool` 检查 85 个文件，0 变化。原始测试事件：`D:\dev\tmp\hanmusic-a0-20261003-rc1\flutter-test.jsonl`，汇总：同目录 `test-summary.json`。新增 `.github/workflows/windows-ci.yml`，云端实际运行与候选包检查尚待完成。已建立 [A1 人工验收记录](./v0.1人工验收记录.md)，所有人工项仍为未执行。
+执行进度（2026-10-03）：本机分析与测试按顺序执行。全量测试保留默认并发，没有发现时序失败；分析耗时 163.4 秒，测试报告耗时 72.876 秒。`dart format --output=none --set-exit-if-changed lib test tool` 检查 85 个文件，0 变化，`flutter pub get --enforce-lockfile` 成功且锁文件未变。原始测试事件：`D:\dev\tmp\hanmusic-a0-20261003-rc1\flutter-test.jsonl`，汇总：同目录 `test-summary.json`。
+
+新增 `.github/workflows/windows-ci.yml`。首次 [CI #1](https://github.com/LiMuxing666/HanMusic/actions/runs/37090219558) 分析/格式/锁文件通过，测试 402 通过、6 失败，构建被跳过；6 项均因 `app_exit_integration_test.dart` 在创建临时子目录前假定 `D:/dev/tmp` 存在。失败日志保留在上述证据目录的 `ci-job.log`，夹具修复后的全量与 CI 复验待完成。
+
+候选包：`D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-rc.1-M5.zip`，21,002,960 字节，SHA-256：`eba49164f59afa9dd5d37b0fc237e4a93411b235926a9ac2a07b9c2a0b480220`。正常 `lib/main.dart` Windows Release 构建通过。清单为 35 项，`version=0.1.0-rc.1+27`、`gitCommit=083784f0d7fdc90a811401b45afbc6e31af9d3dd`、`gitDirty=false`、`publicReleaseReady=false`；包内 README 版本正确。测试夹具修复不改变包中的产品代码。
+
+开发机包检查 6/6 通过：ZIP SHA-256、完整文件清单/路径/无用户数据、x64 运行库、系统 PowerShell 启动器 8 秒响应、数据目录锁持有和释放。报告：`D:\dev\tmp\hanmusic-m5-package-verification\验收 包 20261003-103611-021-c72d61d2\verification.json`。已建立 [A1 人工验收记录](./v0.1人工验收记录.md)，所有人工项仍为未执行。A0 在修复后的全量及 CI 通过前保持进行中。
 
 **退出条件**：全量测试与 CI 均为绿；rc.1 包通过既有 6 项包检查。
 
@@ -327,4 +333,4 @@ G. 工程治理（与 A 并行，不改行为）
 | 日期 | 版本 | 变更 |
 | --- | --- | --- |
 | 2026-10-03 | 2.0 | 基于 dev.26 现状建立总路线图：M5 功能冻结与收口冲刺、性能测量协议、Windows 沙盒干净机方案、许可闭合路径、v0.2–v1.0 范围与 Android 后置建议、工程治理与待决策事项 |
-| 2026-10-03 | 2.1 | 开始 A0：落实功能冻结，全量分析与 408 项测试通过，加入固定 SDK 的 Windows CI、CHANGELOG 与 A1 人工验收清单；云端与候选包证据待记录 |
+| 2026-10-03 | 2.1 | 开始 A0：落实功能冻结，全量分析与 408 项测试通过，加入固定 SDK 的 Windows CI、CHANGELOG 与 A1 人工验收清单；rc.1 包 6/6 通过，首次 CI 暴露 6 项本机临时目录依赖，修复后复验待完成 |

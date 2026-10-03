@@ -20,6 +20,7 @@ import 'package:han_music/app/services/player_service.dart';
 import 'package:han_music/app/services/sleep_timer_coordinator.dart';
 import 'package:han_music/app/services/timer_service.dart';
 import 'package:han_music/main.dart' show HanMusicApp;
+import 'package:path/path.dart' as p;
 
 import 'support/fake_audio_backend.dart';
 import 'support/fake_online_music.dart';
@@ -466,13 +467,12 @@ final _song = Song(
 
 Future<File> _copyPickerFixture(WidgetTester tester) async {
   final copied = await tester.runAsync(() async {
-    final directory = await Directory(
-      'D:/dev/tmp',
-    ).createTemp('hanmusic-exit-picker-');
-    final normalized = directory.absolute.path
-        .replaceAll('\\', '/')
-        .toLowerCase();
-    if (!normalized.startsWith('d:/dev/tmp/hanmusic-exit-picker-')) {
+    final temporaryRoot = Directory.systemTemp;
+    final directory = await temporaryRoot.createTemp('hanmusic-exit-picker-');
+    final rootPath = await temporaryRoot.resolveSymbolicLinks();
+    final parentPath = await directory.parent.resolveSymbolicLinks();
+    if (!p.equals(parentPath, rootPath) ||
+        !p.basename(directory.path).startsWith('hanmusic-exit-picker-')) {
       throw StateError('Unexpected test fixture directory.');
     }
     final file = File('${directory.path}/picked.wav');
