@@ -1,12 +1,12 @@
 # Windows M5 干净机验收交接（rc.2）
 
-状态：**待执行**。截至 2026-10-03，尚未在没有 Flutter、Visual Studio、JDK 的 Windows x64 环境运行 rc.2；下列字段是交接记录模板，不是通过记录。rc.2 开发机完整包检查待执行，结果将记入[总计划 A4](./43-HanMusic后续开发总计划.md)，不能替代干净机播放与正常退出验收。
+状态：**待执行**。截至 2026-10-03，尚未在没有 Flutter、Visual Studio、JDK 的 Windows x64 环境运行 rc.2；下列字段是交接记录模板，不是通过记录。rc.2 开发机完整包检查 6/6 通过，结果已记入[总计划 A4](./43-HanMusic后续开发总计划.md)，不能替代干净机播放与正常退出验收。
 
 ## 交接包
 
-- 完整 ZIP：`HanMusic-Windows-x64-0.1.0-rc.2-M5.zip`，开发机路径为 `D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-rc.2-M5.zip`（待生成）。
-- 版本：`0.1.0-rc.2+28`，源码提交待构建后记录。
-- 预期 SHA-256 待完整包验证后记录。在宿主机先运行 `Get-FileHash -Algorithm SHA256 -LiteralPath '<ZIP 绝对路径>'`；不一致则停止验收。
+- 完整 ZIP：`HanMusic-Windows-x64-0.1.0-rc.2-M5.zip`，开发机路径为 `D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-rc.2-M5.zip`。
+- 版本：`0.1.0-rc.2+28`，源码提交 `7652210e1a714f50067a9702bf7d440e159b97a5`（干净工作区）。
+- 预期 SHA-256：`a1006183c418d200ec5b1f4d7a9856d9a8f4dc0d72aac9f3bf4b571028e26f18`。在宿主机先运行 `Get-FileHash -Algorithm SHA256 -LiteralPath '<ZIP 绝对路径>'`；不一致则停止验收。
 - 保留 ZIP 内完整目录、`BUILD-MANIFEST.json`、`DISTRIBUTION-AUDIT.md` 和 `licenses/`，不要只复制 EXE。此包为开发预览，`publicReleaseReady=false`。
 
 ## 目标机最小执行步骤
@@ -21,7 +21,7 @@
 
 本机配置为 [tool/HanMusic-CleanRoom.wsb](../tool/HanMusic-CleanRoom.wsb)：只读映射 rc.2 完整目录和测试音频，结果目录 `D:\dev\tmp\hanmusic-cleanroom-rc2` 可写映射到 `C:\HanMusicResults`。网络开启；`AudioInput` 关闭的是麦克风输入，实际音频输出仍须在沙盒内听音验收。路径配置按 [Microsoft 官方 .wsb 文档](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-configure-using-wsb-file)编写，所有宿主映射目录须已存在。
 
-2026-10-03 准备检查：本机 `C:\Windows\System32\WindowsSandbox.exe` 不存在，沙盒尚未运行。rc.2 映射目录检查将在包生成后执行；准备检查不能记为干净机通过。启用“Windows 沙盒”需要管理员操作及可能的重启，须在合适的时间安排。
+2026-10-03 准备检查：本机 `C:\Windows\System32\WindowsSandbox.exe` 不存在，沙盒尚未运行。rc.2 的 3 个映射目录均已存在，2 个只读、1 个可写配置检查通过；准备检查不能记为干净机通过。启用“Windows 沙盒”需要管理员操作及可能的重启，须在合适的时间安排。
 
 启用沙盒后双击 `.wsb`，先在沙盒 PowerShell 保存 `C:\HanMusicPackage\Check-Runtime.ps1 -AsJson` 的原始输出到 `C:\HanMusicResults`，记录系统是否自带 VC++ 运行库；缺少时安装官方 x64 运行库后复检。缺库负向项只能按实际结果填写，不能预先假定。
 
