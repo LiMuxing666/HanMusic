@@ -1,0 +1,26 @@
+<Configuration>
+  <Networking>Enable</Networking>
+  <AudioInput>Disable</AudioInput>
+  <VideoInput>Disable</VideoInput>
+  <MemoryInMB>4096</MemoryInMB>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-rc.1-M5</HostFolder>
+      <SandboxFolder>C:\HanMusicPackage</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>D:\project\音乐播放器\test\library\fixtures</HostFolder>
+      <SandboxFolder>C:\HanMusicAudio</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>D:\dev\tmp\hanmusic-cleanroom-rc1</HostFolder>
+      <SandboxFolder>C:\HanMusicResults</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>explorer.exe C:\HanMusicPackage</Command>
+  </LogonCommand>
+</Configuration>
