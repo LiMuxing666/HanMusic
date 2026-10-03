@@ -115,6 +115,10 @@ void main() {
         expect((await tryInChild(temporary))['status'], 'in_use');
         child.stdin.writeln('release');
         await child.stdin.flush();
+        // Close the pipe after the command: Windows can retain the child's
+        // stdin read handle after its line subscription is canceled. EOF lets
+        // normal process shutdown finish without relying on scheduler timing.
+        await child.stdin.close();
         expect(await child.exitCode.timeout(const Duration(seconds: 10)), 0);
         holders.remove(child);
         expect(await file.readAsString(), 'existing marker');
