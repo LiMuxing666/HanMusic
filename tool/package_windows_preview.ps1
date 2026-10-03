@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'windows_packaging_utils.ps1')
+. (Join-Path $PSScriptRoot 'windows_third_party_notices.ps1')
 
 if ($PackageName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]+$') {
     throw 'PackageName must be a plain file name, not a path.'
@@ -151,10 +152,7 @@ try {
         }
     }
 
-    $compressed = [IO.File]::OpenRead((Join-Path $stage 'data\flutter_assets\NOTICES.Z'))
-    $notices = [IO.File]::Create((Join-Path $stage 'THIRD-PARTY-NOTICES.txt'))
-    $gzip = New-Object IO.Compression.GZipStream($compressed, [IO.Compression.CompressionMode]::Decompress)
-    try { $gzip.CopyTo($notices) } finally { $gzip.Dispose(); $notices.Dispose(); $compressed.Dispose() }
+    $noticeSummary = Write-HanMusicThirdPartyNotices -PackageDirectory $stage
 
     # Keep the launchers ASCII so stock Windows PowerShell 5.1 can read them.
     [IO.File]::WriteAllText((Join-Path $stage 'Start-HanMusic.ps1'), @'
@@ -208,6 +206,7 @@ Launch with Start-HanMusic.cmd to store data in the adjacent UserData folder.
             engineRevision=$sdkVersion.engineRevision; dart=$sdkVersion.dartSdkVersion};
         builtAt=(Get-Date).ToUniversalTime().ToString('o'); publicReleaseReady=$false;
         runtimeRequirements=$runtimeRequirements;
+        thirdPartyNotices=$noticeSummary;
         files=$inventory; inventoryExcludes=@('BUILD-MANIFEST.json','UserData');
         notes='Inventory hashes cover the packaged files before first launch. ZIP SHA256 also covers the manifest.'
     }

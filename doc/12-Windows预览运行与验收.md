@@ -62,7 +62,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Start-HanMusic.ps1 -Da
 | `han_music.exe`、DLL、`data/` | 正常 `lib/main.dart` Release 应用；必须一起保留 |
 | `BUILD-MANIFEST.json` | 版本、源码提交、是否有未提交改动、逐文件大小与 SHA-256；不把工作区未提交状态描述为干净提交 |
 | `Check-Runtime.ps1`、`RUNTIME-REQUIREMENTS.json` | 启动前运行库检查、构建工具链对应的最低版本；要求同时记入构建清单 |
-| `THIRD-PARTY-NOTICES.txt` | 展开的 Flutter/Dart 依赖通知；不能代替原生媒体库的独立许可 |
+| `THIRD_PARTY_NOTICES.txt` | 本次 Flutter/Dart/引擎通知、已收集的补充许可证原文和原生组件来源/实际哈希汇总；对应源码缺口仍须闭合 |
 | `licenses/`、`DISTRIBUTION-AUDIT.md` | 已核对的额外许可材料与尚未解决的对外分发条件 |
 | `DEPENDENCIES.lock` | 构建使用的 Dart 依赖版本 |
 | `PREVIEW-STATUS.txt` | 开发预览与未完成门槛摘要 |

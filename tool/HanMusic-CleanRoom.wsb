@@ -5,7 +5,7 @@
   <MemoryInMB>4096</MemoryInMB>
   <MappedFolders>
     <MappedFolder>
-      <HostFolder>D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-rc.1-M5</HostFolder>
+      <HostFolder>D:\dev\releases\HanMusic\HanMusic-Windows-x64-0.1.0-rc.2-M5</HostFolder>
       <SandboxFolder>C:\HanMusicPackage</SandboxFolder>
       <ReadOnly>true</ReadOnly>
     </MappedFolder>
@@ -15,7 +15,7 @@
       <ReadOnly>true</ReadOnly>
     </MappedFolder>
     <MappedFolder>
-      <HostFolder>D:\dev\tmp\hanmusic-cleanroom-rc1</HostFolder>
+      <HostFolder>D:\dev\tmp\hanmusic-cleanroom-rc2</HostFolder>
       <SandboxFolder>C:\HanMusicResults</SandboxFolder>
       <ReadOnly>false</ReadOnly>
     </MappedFolder>

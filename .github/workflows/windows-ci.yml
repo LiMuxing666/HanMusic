@@ -61,5 +61,11 @@ jobs:
       - name: Run all Flutter tests
         run: flutter test --no-pub
 
+      - name: Check third-party notice assembly
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool/test_windows_third_party_notices.ps1
+
+      - name: Check packaging guards
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool/test_windows_packaging_guards.ps1 -ScratchDirectory "$env:RUNNER_TEMP/hanmusic-package-guards"
+
       - name: Build Windows Release
         run: flutter build windows --release --no-pub

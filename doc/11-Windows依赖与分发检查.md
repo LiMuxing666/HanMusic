@@ -118,7 +118,7 @@ dev.10 实际 `dartjni.dll` 的 PE Delay Import Directory 为 0，`jvm.dll` 属�
 
 ```text
 完整 Release 文件和 data/
-THIRD_PARTY_NOTICES.txt       # 从本次 NOTICES.Z 原样解压，保留原文件
+THIRD_PARTY_NOTICES.txt       # 本次 NOTICES.Z 展开原文、补充许可证、原生组件来源/哈希
 docs/11-Windows依赖与分发检查.md
 docs/licenses/               # 连同 README 与所有原文一起复制
 docs/12-...运行手册.md
@@ -140,3 +140,9 @@ BUILD-INFO / SHA256SUMS      # 版本、commit、SDK、架构、生成时间及�
 使用本机只读命令即可复核关键证据：`Get-FileHash -Algorithm SHA256`；VS 的 `dumpbin.exe /dependents <file>`；CMake 的 `-E tar tf <archive>`；`.NET GZipStream` 展开 `NOTICES.Z`；按 `.dart_tool/package_config.json` 定位锁定包源码。DLL 版本/编译配置来自只读字节字符串检查。最后对最终 ZIP 重新生成清单，不复用中间构建目录的文件哈希。
 
 已补许可证文本的来源、范围和剩余缺口见 [licenses/README.md](licenses/README.md)。它们提供可审阅的原文，**尚未构成完整原生依赖对应源码交付或发行批准**。
+
+## 8. 2026-10-03 通知材料汇总（rc.2）
+
+打包流程改为生成单一 `THIRD_PARTY_NOTICES.txt`，替代此前仅展开 Flutter 通知的 `THIRD-PARTY-NOTICES.txt`。新文件包含本次 `NOTICES.Z` 展开的完整原文、包内 `licenses/` 全部文本的原始字节及 SHA-256，以及实际携带的 Flutter、libmpv/内嵌 FFmpeg、包装插件、JNI 与 HLS 资产的来源材料指引和文件哈希。原始压缩通知与独立许可证仍随包保留。
+
+生成器在写入前检查原文完整性、必需许可文件和原生组件，按稳定顺序拼接，不覆盖已有输出；构建清单记录合并通知路径、补充文件数量、实际组件数量及压缩通知哈希。该步骤汇总已取得材料，不表示 HanMusic 项目授权、原生对应源码、全部静态依赖通知或 LGPL 履行方案已经闭合；`publicReleaseReady` 继续为 `false`。
