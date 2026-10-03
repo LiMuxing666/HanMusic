@@ -1,0 +1,65 @@
+name: Windows CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PUB_HOSTED_URL: https://pub.flutter-io.cn
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      CI: 'true'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Flutter 3.41.9
+        run: |
+          $flutterDirectory = Join-Path $env:RUNNER_TEMP 'flutter'
+          git clone --depth 1 --branch 3.41.9 https://github.com/flutter/flutter.git $flutterDirectory
+          if ($LASTEXITCODE -ne 0) { throw 'Flutter checkout failed.' }
+          $flutterRevision = git -C $flutterDirectory rev-parse HEAD
+          if ($flutterRevision -ne '00b0c91f06209d9e4a41f71b7a512d6eb3b9c694') {
+            throw 'Flutter 3.41.9 revision differs from the validated SDK.'
+          }
+          (Join-Path $flutterDirectory 'bin') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Verify SDK
+        run: flutter --version
+
+      - name: Resolve locked dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Analyze all Dart code
+        run: flutter analyze --no-pub lib test tool
+
+      - name: Check Dart formatting
+        run: dart format --output=none --set-exit-if-changed lib test tool
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Check lockfile is unchanged
+        run: git diff --exit-code -- pubspec.lock
+
+      - name: Run all Flutter tests
+        run: flutter test --no-pub
+
+      - name: Build Windows Release
+        run: flutter build windows --release --no-pub
