@@ -27,6 +27,129 @@ final _song = Song(
 );
 
 void main() {
+  testWidgets('library controls sort, enqueue and play the current results', (
+    tester,
+  ) async {
+    await _withPlayer(
+      tester,
+      withLibrary: true,
+      run: (fixture) async {
+        final songs = _librarySongs(3);
+        fixture.library!.replaceAll([
+          songs[0],
+          songs[1].copyWith(isMissing: true),
+          songs[2],
+        ]);
+        await tester.pumpAndSettle();
+        expect(find.text('共 3 首 · 可播放 2 首'), findsOneWidget);
+        await tester.tap(find.byKey(const Key('library-sort')));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.ancestor(
+            of: find.text('歌曲名称'),
+            matching: find.byWidgetPredicate(
+              (widget) => widget is PopupMenuItem,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('library-sort-direction')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('library-queue-visible')));
+        await tester.pumpAndSettle();
+        expect(fixture.player.queue.map((song) => song.id), [
+          songs[2].id,
+          songs[0].id,
+        ]);
+        expect(find.text('已加入 2 首，已在队列 0 首，跳过缺失 1 首。'), findsOneWidget);
+        expect(fixture.backend.playCalls, 0);
+        await tester.tap(find.byKey(const Key('library-queue-visible')));
+        await tester.pumpAndSettle();
+        expect(find.text('已加入 0 首，已在队列 2 首，跳过缺失 1 首。'), findsOneWidget);
+        expect(fixture.backend.playCalls, 0);
+        await tester.enterText(
+          find.byKey(const Key('library-search')),
+          '00002',
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('播放结果'), findsOneWidget);
+        expect(find.text('共 1 首 · 可播放 1 首'), findsOneWidget);
+        await tester.tap(find.byKey(const Key('library-play-visible')));
+        await tester.pumpAndSettle();
+        expect(fixture.player.queue.single.id, songs[2].id);
+        expect(fixture.player.currentSong.value?.id, songs[2].id);
+        expect(fixture.player.isPlaying.value, isTrue);
+        await tester.enterText(
+          find.byKey(const Key('library-search')),
+          '00001',
+        );
+        await tester.pumpAndSettle();
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.byKey(const Key('library-play-visible')),
+              )
+              .onPressed,
+          isNull,
+        );
+        expect(
+          tester
+              .widget<OutlinedButton>(
+                find.byKey(const Key('library-queue-visible')),
+              )
+              .onPressed,
+          isNull,
+        );
+        expect(
+          fixture.library!.songs.map((song) => song.id),
+          songs.map((song) => song.id),
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+  });
+
+  testWidgets(
+    'player shortcuts are connected and help fits compact large text',
+    (tester) async {
+      await _withPlayer(
+        tester,
+        withLibrary: true,
+        size: const Size(800, 600),
+        textScale: 2,
+        run: (fixture) async {
+          fixture.library!.replaceAll(_librarySongs(2));
+          await tester.pumpAndSettle();
+          final menu = find.byKey(const Key('library-controls-menu'));
+          await tester.tap(menu);
+          await tester.pumpAndSettle();
+          expect(find.text('共 2 首 · 可播放 2 首'), findsOneWidget);
+          await tester.tap(find.text('全部入队'));
+          await tester.pumpAndSettle();
+          expect(fixture.player.queue.length, 2);
+          expect(fixture.backend.playCalls, 0);
+          await tester.tap(menu);
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('播放全部'));
+          await tester.pumpAndSettle();
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+          await tester.sendKeyEvent(LogicalKeyboardKey.space);
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+          await tester.pumpAndSettle();
+          expect(fixture.player.isPlaying.value, isFalse);
+          await tester.tap(find.byKey(const Key('playback-shortcuts-help')));
+          await tester.pumpAndSettle();
+          expect(find.text('键盘快捷键'), findsWidgets);
+          expect(find.text('Ctrl + Space'), findsOneWidget);
+          expect(tester.takeException(), isNull);
+          await tester.tap(find.text('知道了'));
+          await tester.pumpAndSettle();
+          expect(find.byType(AlertDialog), findsNothing);
+        },
+      );
+    },
+  );
+
   testWidgets(
     'custom sleep timer rejects oversized integers and accepts 24 hours',
     (tester) async {
@@ -1464,10 +1587,22 @@ void main() {
             );
 
             Future<void> showSong(Song value) async {
-              // FileImage must begin its real file IO outside FakeAsync.
+              // FileImage and the lyric sidecar must finish real IO before
+              // FakeAsync can settle the lyric loading animation.
               await tester.runAsync(() async {
                 await fixture.player.restoreQueue([value]);
                 await tester.pump();
+                final lyricLoading = find.descendant(
+                  of: find.byKey(const Key('lyrics-card')),
+                  matching: find.byType(CircularProgressIndicator),
+                );
+                final deadline = DateTime.now().add(const Duration(seconds: 6));
+                while (lyricLoading.evaluate().isNotEmpty &&
+                    DateTime.now().isBefore(deadline)) {
+                  await Future<void>.delayed(const Duration(milliseconds: 20));
+                  await tester.pump();
+                }
+                expect(lyricLoading, findsNothing);
               });
               await tester.pumpAndSettle();
             }

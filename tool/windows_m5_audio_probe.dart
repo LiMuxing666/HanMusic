@@ -241,7 +241,7 @@ class _M5Probe {
     'os': Platform.operatingSystemVersion,
     'dartVersion': Platform.version,
     'backend':
-        'production JustAudioBackend / just_audio_media_kit / media_kit Windows native decoder',
+        'production JustAudioBackend / MediaKitAudioBackend / media_kit Windows native decoder',
     'backendVersionsFromFixtureGenerationLockfile':
         manifest?['backendVersionsFromLockfile'],
     'ffmpegVersion': manifest?['ffmpegVersion'],
@@ -285,7 +285,7 @@ class _M5Probe {
       'Loopback timings exclude real Internet latency, TLS handshakes, commercial APIs and authentication.',
       'Six generated codec/container samples do not cover all profiles, damaged media, bit rates, tags or large libraries.',
       'No OS sleep, sound-device switch, audio loopback capture or clean-machine deployment is validated by this probe.',
-      'The production adapter bounds the known bridge error-stream/load-Future hang; this does not fix upstream just_audio_media_kit.',
+      'Windows uses MediaKitAudioBackend directly with bounded loads and subtitle auto-loading disabled; this does not modify upstream just_audio_media_kit.',
     ],
   };
 

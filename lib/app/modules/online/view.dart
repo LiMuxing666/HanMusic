@@ -2,22 +2,31 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
+import '../../core/theme/app_theme.dart';
+
 import '../../data/models/online_source_config.dart';
 import '../../data/models/song.dart';
 import '../shared/music_search_field.dart';
 import 'controller.dart';
-
-const _green = Color(0xFF256747);
-const _muted = Color(0xFF738077);
 
 class OnlineMusicPage extends StatefulWidget {
   const OnlineMusicPage({
     super.key,
     required this.controller,
     this.searchFieldKey,
+    this.onPlayNext,
+    this.onFavorite,
+    this.isFavorite,
+    this.onAddToPlaylist,
+    this.onDetails,
   });
   final OnlineMusicController controller;
   final GlobalKey<MusicSearchFieldState>? searchFieldKey;
+  final ValueChanged<Song>? onPlayNext;
+  final ValueChanged<Song>? onFavorite;
+  final bool Function(Song)? isFavorite;
+  final ValueChanged<Song>? onAddToPlaylist;
+  final ValueChanged<Song>? onDetails;
 
   @override
   State<OnlineMusicPage> createState() => _OnlineMusicPageState();
@@ -63,11 +72,14 @@ class _OnlineMusicPageState extends State<OnlineMusicPage> {
               children: [
                 Text('在线音乐', style: Theme.of(context).textTheme.headlineMedium),
                 const SizedBox(height: 5),
-                const Text(
+                Text(
                   '从你选择的音乐源，发现喜欢的声音。',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: _muted, fontSize: 12),
+                  style: TextStyle(
+                    color: HanMusicColors.of(context).muted,
+                    fontSize: 12,
+                  ),
                 ),
               ],
             ),
@@ -192,7 +204,10 @@ class _OnlineMusicPageState extends State<OnlineMusicPage> {
             status,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: _muted, fontSize: 12),
+            style: TextStyle(
+              color: HanMusicColors.of(context).muted,
+              fontSize: 12,
+            ),
           ),
         );
       }),
@@ -203,15 +218,15 @@ class _OnlineMusicPageState extends State<OnlineMusicPage> {
           margin: const EdgeInsets.only(bottom: 10),
           padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
           decoration: BoxDecoration(
-            color: const Color(0xFFFFF0E9),
+            color: HanMusicColors.of(context).warningSurface,
             borderRadius: BorderRadius.circular(12),
           ),
           child: Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.info_outline_rounded,
                 size: 20,
-                color: Color(0xFF945036),
+                color: HanMusicColors.of(context).onWarning,
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -219,9 +234,9 @@ class _OnlineMusicPageState extends State<OnlineMusicPage> {
                   error,
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
-                    color: Color(0xFF7D4835),
+                    color: HanMusicColors.of(context).onWarning,
                   ),
                 ),
               ),
@@ -256,7 +271,7 @@ class _OnlineMusicPageState extends State<OnlineMusicPage> {
       );
     }
     if (service.isSearching.value && results.isEmpty) {
-      return const SliverFillRemaining(
+      return SliverFillRemaining(
         hasScrollBody: false,
         child: Center(
           child: Column(
@@ -264,7 +279,10 @@ class _OnlineMusicPageState extends State<OnlineMusicPage> {
             children: [
               CircularProgressIndicator(),
               SizedBox(height: 15),
-              Text('正在搜索…', style: TextStyle(color: _muted)),
+              Text(
+                '正在搜索…',
+                style: TextStyle(color: HanMusicColors.of(context).muted),
+              ),
             ],
           ),
         ),
@@ -315,9 +333,12 @@ class _OnlineMusicPageState extends State<OnlineMusicPage> {
                               : controller.loadMore,
                           child: const Text('加载更多'),
                         )
-                      : const Text(
+                      : Text(
                           '已经到底了',
-                          style: TextStyle(color: _muted, fontSize: 12),
+                          style: TextStyle(
+                            color: HanMusicColors.of(context).muted,
+                            fontSize: 12,
+                          ),
                         ),
                 ),
               );
@@ -328,6 +349,19 @@ class _OnlineMusicPageState extends State<OnlineMusicPage> {
               sourceName: selected.name,
               onPlay: openingId == song.id ? null : () => controller.play(song),
               onQueue: () => controller.enqueue(song),
+              onDetails: widget.onDetails == null
+                  ? null
+                  : () => widget.onDetails!(song),
+              onPlayNext: widget.onPlayNext == null
+                  ? null
+                  : () => widget.onPlayNext!(song),
+              onFavorite: widget.onFavorite == null
+                  ? null
+                  : () => widget.onFavorite!(song),
+              isFavorite: () => widget.isFavorite?.call(song) ?? false,
+              onAddToPlaylist: widget.onAddToPlaylist == null
+                  ? null
+                  : () => widget.onAddToPlaylist!(song),
             );
           },
         ),
@@ -342,11 +376,21 @@ class _OnlineSongRow extends StatelessWidget {
     required this.sourceName,
     required this.onPlay,
     required this.onQueue,
+    this.onPlayNext,
+    this.onFavorite,
+    this.isFavorite,
+    this.onAddToPlaylist,
+    this.onDetails,
   });
   final Song song;
   final String sourceName;
   final VoidCallback? onPlay;
   final VoidCallback onQueue;
+  final VoidCallback? onPlayNext;
+  final VoidCallback? onFavorite;
+  final bool Function()? isFavorite;
+  final VoidCallback? onAddToPlaylist;
+  final VoidCallback? onDetails;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -369,10 +413,13 @@ class _OnlineSongRow extends StatelessWidget {
                 width: 42,
                 height: 42,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE0EAD6),
+                  color: HanMusicColors.of(context).coverSurface,
                   borderRadius: BorderRadius.circular(9),
                 ),
-                child: const Icon(Icons.music_note_rounded, color: _green),
+                child: Icon(
+                  Icons.music_note_rounded,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -390,7 +437,10 @@ class _OnlineSongRow extends StatelessWidget {
                       '$sourceName · ${song.artist ?? "未知歌手"} · ${song.album ?? "未知专辑"}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12, color: _muted),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: HanMusicColors.of(context).muted,
+                      ),
                     ),
                   ],
                 ),
@@ -398,7 +448,10 @@ class _OnlineSongRow extends StatelessWidget {
               const SizedBox(width: 10),
               Text(
                 song.duration == null ? '--:--' : _durationText(song.duration!),
-                style: const TextStyle(color: _muted, fontSize: 12),
+                style: TextStyle(
+                  color: HanMusicColors.of(context).muted,
+                  fontSize: 12,
+                ),
               ),
               IconButton(
                 tooltip: '播放${song.title}',
@@ -410,6 +463,40 @@ class _OnlineSongRow extends StatelessWidget {
                 onPressed: onQueue,
                 icon: const Icon(Icons.playlist_add_rounded, size: 23),
               ),
+              if (onPlayNext != null ||
+                  onFavorite != null ||
+                  onAddToPlaylist != null)
+                PopupMenuButton<String>(
+                  key: ValueKey('online-actions-${song.id}'),
+                  tooltip: '歌曲操作',
+                  onSelected: (action) {
+                    if (action == 'next') onPlayNext?.call();
+                    if (action == 'favorite') onFavorite?.call();
+                    if (action == 'playlist') onAddToPlaylist?.call();
+                    if (action == 'details') onDetails?.call();
+                  },
+                  itemBuilder: (_) => [
+                    if (onPlayNext != null)
+                      const PopupMenuItem(value: 'next', child: Text('下一首播放')),
+                    if (onFavorite != null)
+                      PopupMenuItem(
+                        value: 'favorite',
+                        child: Text(
+                          isFavorite?.call() == true ? '取消喜欢' : '加入我喜欢',
+                        ),
+                      ),
+                    if (onAddToPlaylist != null)
+                      const PopupMenuItem(
+                        value: 'playlist',
+                        child: Text('添加到歌单'),
+                      ),
+                    if (onDetails != null)
+                      const PopupMenuItem(
+                        value: 'details',
+                        child: Text('歌曲详情'),
+                      ),
+                  ],
+                ),
             ],
           ),
         ),
@@ -434,7 +521,7 @@ class _OnlineEmpty extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: _green, size: 42),
+          Icon(icon, color: Theme.of(context).colorScheme.primary, size: 42),
           const SizedBox(height: 14),
           Text(
             title,
@@ -445,7 +532,10 @@ class _OnlineEmpty extends StatelessWidget {
           Text(
             message,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: _muted, fontSize: 13),
+            style: TextStyle(
+              color: HanMusicColors.of(context).muted,
+              fontSize: 13,
+            ),
           ),
         ],
       ),
@@ -529,9 +619,12 @@ class _SourceEditorState extends State<_SourceEditor> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               '配置提供 JSON 接口的 HTTP(S) 音乐源。目前仅支持无需登录的源，不支持凭据或自定义请求 Header。',
-              style: TextStyle(color: _muted, fontSize: 12),
+              style: TextStyle(
+                color: HanMusicColors.of(context).muted,
+                fontSize: 12,
+              ),
             ),
             const SizedBox(height: 14),
             Obx(
@@ -575,8 +668,8 @@ class _SourceEditorState extends State<_SourceEditor> {
                       child: Text(
                         error,
                         key: const Key('online-source-error'),
-                        style: const TextStyle(
-                          color: Color(0xFF945036),
+                        style: TextStyle(
+                          color: HanMusicColors.of(context).onWarning,
                           fontSize: 12,
                         ),
                       ),
@@ -668,7 +761,7 @@ class _ConnectionTestState extends State<_ConnectionTest> {
           children: [
             Text(
               '音乐源：${widget.source.name}',
-              style: const TextStyle(color: _muted),
+              style: TextStyle(color: HanMusicColors.of(context).muted),
             ),
             const SizedBox(height: 14),
             TextFormField(
@@ -686,7 +779,9 @@ class _ConnectionTestState extends State<_ConnectionTest> {
                 padding: const EdgeInsets.only(top: 12),
                 child: Text(
                   widget.controller.service.statusMessage.value ?? '连接成功',
-                  style: const TextStyle(color: _green),
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
                 ),
               ),
             Obx(
@@ -696,8 +791,8 @@ class _ConnectionTestState extends State<_ConnectionTest> {
                       padding: const EdgeInsets.only(top: 12),
                       child: Text(
                         widget.controller.actionError.value!,
-                        style: const TextStyle(
-                          color: Color(0xFF945036),
+                        style: TextStyle(
+                          color: HanMusicColors.of(context).onWarning,
                           fontSize: 12,
                         ),
                       ),

@@ -174,7 +174,9 @@ Future<void> _runProbe(Directory output) async {
       'limitations': [
         'Clock/state/decoder verification does not confirm audible speaker output.',
         'Window minimization, device changes, system sleep and clean-machine distribution require separate checks.',
-        'Invalid-source checks exercise the production JustAudioBackend adapter. '
+        'Invalid-source checks exercise the production JustAudioBackend adapter, '
+            'which now uses MediaKitAudioBackend directly on Windows. The raw '
+            'AudioPlayer comparisons retain the older bridge. '
             'just_audio_media_kit 2.1.0 publishes native errors without completing '
             'its pending load Future; raw AudioPlayer.setUrl hung in the initial run. '
             'Passing adapter checks does not mean that upstream bridge defect is fixed.',

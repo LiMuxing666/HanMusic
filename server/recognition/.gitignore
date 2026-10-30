@@ -1,0 +1,7 @@
+.env
+*.env
+!.env.example
+secret.env
+data/
+*.tgz
+node_modules/

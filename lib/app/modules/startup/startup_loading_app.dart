@@ -4,13 +4,17 @@ import '../../core/theme/app_theme.dart';
 
 /// The first frame is independent of disk, audio, and GetX initialization.
 class StartupLoadingApp extends StatelessWidget {
-  const StartupLoadingApp({super.key});
+  const StartupLoadingApp({super.key, this.themeMode = ThemeMode.system});
+
+  final ThemeMode themeMode;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
     title: 'HanMusic',
     debugShowCheckedModeBanner: false,
     theme: HanMusicTheme.light,
+    darkTheme: HanMusicTheme.dark,
+    themeMode: themeMode,
     home: const Scaffold(
       body: SafeArea(
         child: Center(

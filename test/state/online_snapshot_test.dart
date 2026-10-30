@@ -43,7 +43,7 @@ void main() {
   );
 
   test(
-    'schema one local state migrates to schema two without changing identity',
+    'schema one local state migrates to schema three without changing identity',
     () {
       final old = {
         ...AppSnapshot(
@@ -54,7 +54,7 @@ void main() {
         'schemaVersion': 1,
       };
       final migrated = AppSnapshot.fromJson(old);
-      expect(migrated.toJson()['schemaVersion'], 2);
+      expect(migrated.toJson()['schemaVersion'], 5);
       expect(migrated.queue.single.id, local.id);
       expect(migrated.currentId, local.id);
     },
@@ -79,7 +79,7 @@ void main() {
       throwsFormatException,
     );
     expect(
-      () => AppSnapshot.fromJson({...snapshot.toJson(), 'schemaVersion': 3}),
+      () => AppSnapshot.fromJson({...snapshot.toJson(), 'schemaVersion': 6}),
       throwsA(isA<UnsupportedStateVersion>()),
     );
   });

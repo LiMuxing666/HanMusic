@@ -2,19 +2,48 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:just_audio/just_audio.dart';
-import 'package:just_audio_media_kit/just_audio_media_kit.dart';
+import 'package:media_kit/media_kit.dart';
 
 import 'audio_backend.dart';
+import 'media_kit_audio_backend.dart';
 
 void initializeAudioBackend() {
   if (Platform.isWindows) {
-    JustAudioMediaKit.ensureInitialized(windows: true, linux: false);
-    JustAudioMediaKit.title = 'HanMusic';
+    MediaKit.ensureInitialized();
   }
 }
 
 class JustAudioBackend implements AudioBackend {
-  JustAudioBackend() {
+  JustAudioBackend()
+    : _delegate = Platform.isWindows
+          ? MediaKitAudioBackend()
+          : _JustAudioBackend();
+
+  final AudioBackend _delegate;
+  @override
+  Stream<BackendPlaybackState> get states => _delegate.states;
+  @override
+  Stream<Duration> get positions => _delegate.positions;
+  @override
+  Stream<Duration?> get durations => _delegate.durations;
+  @override
+  Stream<Object> get errors => _delegate.errors;
+  @override
+  Future<Duration?> load(Uri uri) => _delegate.load(uri);
+  @override
+  Future<void> play() => _delegate.play();
+  @override
+  Future<void> pause() => _delegate.pause();
+  @override
+  Future<void> seek(Duration position) => _delegate.seek(position);
+  @override
+  Future<void> setVolume(double volume) => _delegate.setVolume(volume);
+  @override
+  Future<void> dispose() => _delegate.dispose();
+}
+
+class _JustAudioBackend implements AudioBackend {
+  _JustAudioBackend() {
     _player = _audioZone.run(AudioPlayer.new);
     _errorSubscription = _player.errorStream.listen(_reportError);
   }

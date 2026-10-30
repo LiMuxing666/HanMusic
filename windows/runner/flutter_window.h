@@ -9,6 +9,9 @@
 
 #include "win32_window.h"
 
+class DesktopMediaBridge;
+class MusicCaptureBridge;
+
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
  public:
@@ -33,6 +36,8 @@ class FlutterWindow : public Win32Window {
   // Power resume is independent of window visibility or keyboard focus.
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> power_channel_;
   HPOWERNOTIFY power_notification_ = nullptr;
+  std::unique_ptr<DesktopMediaBridge> desktop_media_;
+  std::unique_ptr<MusicCaptureBridge> music_capture_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

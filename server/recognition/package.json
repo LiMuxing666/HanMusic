@@ -1,0 +1,12 @@
+{
+  "name": "hanmusic-recognition-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "files": ["src", "test", "Dockerfile", ".dockerignore", "Caddyfile.example", ".env.example", "README.md"],
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test"
+  }
+}

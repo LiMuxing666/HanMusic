@@ -33,6 +33,13 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# Recognition gateway secrets and persistent quota state stay on the server.
+/server/recognition/.env
+/server/recognition/.env.*
+!/server/recognition/.env.example
+/server/recognition/data/
+/server/recognition/node_modules/
+
 # Symbolication related
 app.*.symbols
 

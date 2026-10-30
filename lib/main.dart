@@ -13,7 +13,9 @@ import 'app/data/repositories/app_state_store.dart';
 import 'app/data/repositories/local_library_repository.dart';
 import 'app/data/repositories/online_music_repository.dart';
 import 'app/data/repositories/online_source_store.dart';
+import 'app/data/repositories/music_recognition_repository.dart';
 import 'app/data/sources/just_audio_backend.dart';
+import 'app/data/sources/music_capture.dart';
 import 'app/data/sources/windows_power_events.dart';
 import 'app/routes/app_pages.dart';
 import 'app/modules/player/controller.dart';
@@ -21,11 +23,16 @@ import 'app/modules/startup/startup_failure_app.dart';
 import 'app/modules/startup/startup_loading_app.dart';
 import 'app/modules/startup/unsaved_exit_dialog.dart';
 import 'app/services/app_persistence_service.dart';
+import 'app/services/app_settings_service.dart';
 import 'app/services/app_shutdown_coordinator.dart';
 import 'app/services/data_directory_lock.dart';
+import 'app/services/desktop_media_service.dart';
 import 'app/services/library_service.dart';
 import 'app/services/online_music_service.dart';
+import 'app/services/music_recognition_service.dart';
 import 'app/services/player_service.dart';
+import 'app/services/playlist_service.dart';
+import 'app/services/play_history_service.dart';
 import 'app/services/sleep_timer_coordinator.dart';
 import 'app/services/timer_service.dart';
 
@@ -76,6 +83,10 @@ Future<void> _startHanMusic(Directory dataDirectory) async {
   initializeAudioBackend();
   final store = FileAppStateStore(dataDirectory);
   final snapshot = await store.load();
+  final settings = Get.put(
+    AppSettingsService(initial: snapshot.settings),
+    permanent: true,
+  );
   final library = Get.put(
     LibraryService(
       repository: LocalLibraryRepository(
@@ -86,6 +97,9 @@ Future<void> _startHanMusic(Directory dataDirectory) async {
   );
   library.replaceAll(snapshot.songs);
   await library.refreshMissing();
+  final playlists = Get.put(PlaylistService(), permanent: true);
+  playlists.restore(snapshot.playlists);
+  await playlists.refreshMissing(library.songs.toList());
   final online = OnlineMusicService(
     repository: OnlineMusicRepository(),
     store: FileOnlineSourceStore(
@@ -94,6 +108,13 @@ Future<void> _startHanMusic(Directory dataDirectory) async {
   );
   await online.initialize();
   Get.put(online, permanent: true);
+  Get.put(
+    MusicRecognitionService(
+      capture: WindowsMusicCapture(),
+      repository: MusicRecognitionRepository(),
+    ),
+    permanent: true,
+  );
   final player = Get.put(
     PlayerService(JustAudioBackend(), resolver: online.resolveForPlayback),
     permanent: true,
@@ -126,11 +147,20 @@ Future<void> _startHanMusic(Directory dataDirectory) async {
     skipOnError: snapshot.skipOnError,
   );
   player.errorMessage.value = store.warning;
+  final history = Get.put(PlayHistoryService(player), permanent: true);
+  history.restore(snapshot.history);
+  await history.refreshMissing(library.songs.toList());
+  history.start();
+  final desktopMedia = Get.put(DesktopMediaService(player), permanent: true);
+  await desktopMedia.start();
   final persistence = Get.put(
     AppPersistenceService(
       store: store,
       library: library,
       player: player,
+      playlists: playlists,
+      history: history,
+      settings: settings,
       onError: (message) => player.errorMessage.value ??= message,
     ),
     permanent: true,
@@ -157,9 +187,20 @@ class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
   bool _confirming = false;
   WindowsPowerEvents? _powerEvents;
   Future<bool>? _sourceSaveOnExit;
+  ThemeMode _themeMode = ThemeMode.light;
+  Worker? _themeWorker;
   @override
   void initState() {
     super.initState();
+    if (Get.isRegistered<AppSettingsService>()) {
+      final settings = Get.find<AppSettingsService>();
+      _themeMode = settings.settings.value.themeMode;
+      _themeWorker = ever(settings.settings, (value) {
+        if (mounted && value.themeMode != _themeMode) {
+          setState(() => _themeMode = value.themeMode);
+        }
+      });
+    }
     WidgetsBinding.instance.addObserver(this);
     if (Platform.isWindows) {
       _powerEvents = WindowsPowerEvents(
@@ -167,13 +208,19 @@ class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
       )..start();
     }
     _shutdownCoordinator = AppShutdownCoordinator(
-      cancelImport: () {
+      cancelImport: () async {
         // Capture before awaiting pause: a source write may fail during pause.
         // Each canceled exit gets a fresh checkpoint on its next attempt.
         _sourceSaveOnExit = Get.find<OnlineMusicService>().beginExit();
+        if (Get.isRegistered<DesktopMediaService>()) {
+          Get.find<DesktopMediaService>().beginExit();
+        }
         Get.find<LibraryService>().cancelImport();
         if (Get.isRegistered<PlayerController>()) {
           Get.find<PlayerController>().beginExit();
+        }
+        if (Get.isRegistered<MusicRecognitionService>()) {
+          await Get.find<MusicRecognitionService>().beginExit();
         }
       },
       pause: Get.find<PlayerService>().pause,
@@ -205,9 +252,33 @@ class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
       },
       closePersistence: () =>
           Get.find<AppPersistenceService>().close(flush: false),
-      closePlayer: Get.find<PlayerService>().shutdown,
-      closeOnline: Get.find<OnlineMusicService>().close,
-      closeLibrary: Get.find<LibraryService>().onClose,
+      closePlayer: () async {
+        if (Get.isRegistered<PlayHistoryService>()) {
+          Get.find<PlayHistoryService>().onClose();
+        }
+        if (Get.isRegistered<DesktopMediaService>()) {
+          await Get.find<DesktopMediaService>().close();
+        }
+        await Get.find<PlayerService>().shutdown();
+      },
+      closeOnline: () async {
+        try {
+          if (Get.isRegistered<MusicRecognitionService>()) {
+            await Get.find<MusicRecognitionService>().close();
+          }
+        } finally {
+          await Get.find<OnlineMusicService>().close();
+        }
+      },
+      closeLibrary: () {
+        Get.find<LibraryService>().onClose();
+        if (Get.isRegistered<PlaylistService>()) {
+          Get.find<PlaylistService>().onClose();
+        }
+        if (Get.isRegistered<AppSettingsService>()) {
+          Get.find<AppSettingsService>().onClose();
+        }
+      },
     );
   }
 
@@ -217,6 +288,12 @@ class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
     final allowExit = await _shutdownCoordinator.shutdown();
     if (!allowExit) {
       Get.find<OnlineMusicService>().cancelExit();
+      if (Get.isRegistered<MusicRecognitionService>()) {
+        Get.find<MusicRecognitionService>().cancelExit();
+      }
+      if (Get.isRegistered<DesktopMediaService>()) {
+        Get.find<DesktopMediaService>().cancelExit();
+      }
       if (Get.isRegistered<PlayerController>()) {
         Get.find<PlayerController>().cancelExit();
       }
@@ -227,6 +304,7 @@ class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _themeWorker?.dispose();
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_shutdownCoordinator.shutdown(force: true));
     super.dispose();
@@ -237,6 +315,8 @@ class _HanMusicAppState extends State<HanMusicApp> with WidgetsBindingObserver {
     title: 'HanMusic',
     debugShowCheckedModeBanner: false,
     theme: HanMusicTheme.light,
+    darkTheme: HanMusicTheme.dark,
+    themeMode: _themeMode,
     initialRoute: AppPages.player,
     getPages: AppPages.pages,
     builder: (context, child) {

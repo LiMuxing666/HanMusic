@@ -1,0 +1,11 @@
+**
+!package.json
+!src/
+!src/**
+!Dockerfile
+.env
+*.env
+secret.env
+data/
+test/
+*.tgz

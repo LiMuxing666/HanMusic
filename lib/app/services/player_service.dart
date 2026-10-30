@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:get/get.dart';
 
 import '../data/models/play_mode.dart';
@@ -16,9 +17,15 @@ class PlayerService extends GetxService {
     _subscriptions.addAll([
       _backend.states.listen((state) {
         if (_disposed) return;
+        final wasBuffering = _backendLoading;
+        final wasCompleted = _completed;
+        _backendLoading = state.loading;
         final newlyCompleted = state.completed && !_completed;
         _completed =
             state.completed || (_completed && !state.playing && !state.loading);
+        if (wasBuffering != _backendLoading || wasCompleted != _completed) {
+          _playbackObservationRevision.value++;
+        }
         if (state.completed && duration.value > Duration.zero) {
           position.value = duration.value;
         }
@@ -65,6 +72,9 @@ class PlayerService extends GetxService {
   final _random = Random();
   final _failedIds = <String>{};
   final _shuffleBag = <String>[];
+  // Explicit requests take precedence over each playback mode for this run.
+  // Only the visible queue order is persisted; these requests are transient.
+  final _playNextIds = <String>[];
   final _history = <String>[];
   int _historyIndex = -1;
   PlayMode _lastMode = PlayMode.sequential;
@@ -78,6 +88,9 @@ class PlayerService extends GetxService {
   int _selectionGeneration = 0;
   int _loadGeneration = 0;
   int _seekRevision = 0;
+  int? _pendingSeekRevision;
+  bool _backendLoading = false;
+  final _playbackObservationRevision = 0.obs;
   int _volumeRevision = 0;
   int _confirmedVolumeRevision = 0;
   double _confirmedVolume = 0.7;
@@ -106,6 +119,7 @@ class PlayerService extends GetxService {
   }
 
   void _manualSelection(String? id) {
+    _playNextIds.remove(id);
     _playbackGuard?.onManualSelection(id);
     _playbackGuard?.onManualPlayback();
   }
@@ -115,6 +129,23 @@ class PlayerService extends GetxService {
 
   /// Identifies a selection, including a reload of the same song.
   int get selectionRevision => _selectionGeneration;
+
+  /// History observers must discard progress spanning an explicit seek.
+  int get seekRevision => _seekRevision;
+
+  /// Native buffering and seeks can change without changing the UI play state.
+  Stream<int> get playbackObservationChanges =>
+      _playbackObservationRevision.stream;
+
+  bool get canObservePlaybackPosition =>
+      !_disposed &&
+      _loaded.value &&
+      !_completed &&
+      _wantsPlayback &&
+      isPlaying.value &&
+      !isLoading.value &&
+      !_backendLoading &&
+      _pendingSeekRevision == null;
 
   /// A restored selection is playable without eagerly opening its native file.
   bool get canPlay =>
@@ -138,6 +169,7 @@ class PlayerService extends GetxService {
         ? null
         : songs[startIndex.clamp(0, songs.length - 1)].id;
     _manualSelection(selectedId);
+    _playNextIds.clear();
     queue.assignAll(_unique(songs));
     _resetNavigation();
     _failedIds.clear();
@@ -163,10 +195,64 @@ class PlayerService extends GetxService {
     return QueueAddResult.added;
   }
 
+  /// Schedules a track without interrupting playback or changing timer policy.
+  QueueAddResult playNext(Song song) {
+    if (_disposed || song.isMissing) return QueueAddResult.unavailable;
+    // The controller resolves the latest library/playlist snapshot. A queued
+    // copy can still carry an old missing flag or old metadata.
+    final requested = song;
+    if (currentSong.value?.id == requested.id) return QueueAddResult.unchanged;
+
+    final indexed = {for (final item in queue) item.id: item};
+    indexed[requested.id] = requested;
+    final pending = [
+      requested.id,
+      ..._playNextIds.where(
+        (id) =>
+            id != requested.id &&
+            id != currentSong.value?.id &&
+            indexed[id]?.isMissing == false &&
+            !_failedIds.contains(id),
+      ),
+    ];
+    final pendingIds = pending.toSet();
+    final reordered = queue
+        .where((item) => !pendingIds.contains(item.id))
+        .toList();
+    final insertion =
+        reordered.indexWhere((item) => item.id == currentSong.value?.id) + 1;
+    reordered.insertAll(insertion, pending.map((id) => indexed[id]!));
+    var queueChanged = reordered.length != queue.length;
+    for (var index = 0; !queueChanged && index < queue.length; index++) {
+      final before = queue[index];
+      final after = reordered[index];
+      queueChanged =
+          !identical(before, after) &&
+          !mapEquals(before.toJson(), after.toJson());
+    }
+    var priorityChanged = _playNextIds.length != pending.length;
+    for (var index = 0; !priorityChanged && index < pending.length; index++) {
+      priorityChanged = _playNextIds[index] != pending[index];
+    }
+    if (!queueChanged && !priorityChanged) return QueueAddResult.unchanged;
+
+    _playNextIds
+      ..clear()
+      ..addAll(pending);
+    _failedIds.remove(requested.id);
+    if (queueChanged) queue.assignAll(reordered);
+    if (currentSong.value == null) {
+      _playNextIds.remove(requested.id);
+      _selectRestored(requested, Duration.zero);
+    }
+    return QueueAddResult.added;
+  }
+
   Future<void> clearQueue() async {
     if (_disposed || queue.isEmpty) return;
     queue.clear();
     _failedIds.clear();
+    _playNextIds.clear();
     await _clearSelection();
   }
 
@@ -282,6 +368,7 @@ class PlayerService extends GetxService {
   }) async {
     if (_disposed) return;
     _playbackGuard?.onManualSelection(null);
+    _playNextIds.clear();
     ++_playIntent;
     final request = _beginSelection();
     ++_loadGeneration;
@@ -349,6 +436,9 @@ class PlayerService extends GetxService {
           final index = queue.indexWhere((song) => song.id == candidateId);
           if (index < 0 || _failedIds.contains(candidateId)) continue;
           final song = queue[index];
+          // Consume on the first attempt, so a broken priority track cannot
+          // repeatedly win automatic selection after its load fails.
+          _playNextIds.remove(candidateId);
           final result = await _loadSong(
             song,
             request: request,
@@ -535,6 +625,8 @@ class PlayerService extends GetxService {
 
   int _beginSelection() {
     final generation = ++_selectionGeneration;
+    // An older native seek must not suspend observation of the new selection.
+    _pendingSeekRevision = null;
     final cancellation = _resolutionCancellation;
     _resolutionCancellation = null;
     if (cancellation != null && !cancellation.isCompleted) {
@@ -611,6 +703,8 @@ class PlayerService extends GetxService {
   String? _nextId({required bool completion, bool skipRepeatOne = false}) {
     if (queue.isEmpty) return null;
     _ensureMode();
+    _prunePlayNext();
+    if (_playNextIds.isNotEmpty) return _playNextIds.first;
     final index = currentIndex;
     if (index < 0) return queue.first.id;
     if (completion && !skipRepeatOne && playMode.value == PlayMode.repeatOne) {
@@ -655,10 +749,21 @@ class PlayerService extends GetxService {
       (offset) => queue[(index + offset + 1) % queue.length].id,
     );
     if (playMode.value == PlayMode.shuffle) others.shuffle(_random);
-    return [id, ...others];
+    _prunePlayNext();
+    if (_playNextIds.isEmpty) return [id, ...others];
+    final priority = _playNextIds
+        .where((candidate) => candidate != id)
+        .toList();
+    final priorityIds = priority.toSet();
+    return [
+      id,
+      ...priority,
+      ...others.where((id) => !priorityIds.contains(id)),
+    ];
   }
 
   void _recordHistory(String id) {
+    _playNextIds.remove(id);
     _shuffleBag.remove(id);
     if (_historyIndex >= 0 &&
         _historyIndex < _history.length &&
@@ -696,6 +801,21 @@ class PlayerService extends GetxService {
       _historyIndex = _history.length - 1;
     }
     _shuffleBag.removeWhere((id) => !ids.contains(id));
+    _prunePlayNext();
+  }
+
+  void _prunePlayNext() {
+    if (_playNextIds.isEmpty) return;
+    final available = queue
+        .where((song) => !song.isMissing)
+        .map((song) => song.id)
+        .toSet();
+    _playNextIds.removeWhere(
+      (id) =>
+          !available.contains(id) ||
+          _failedIds.contains(id) ||
+          id == currentSong.value?.id,
+    );
   }
 
   Future<void> togglePlayback() async {
@@ -734,12 +854,19 @@ class PlayerService extends GetxService {
       if (_pauseForGuard(PlaybackBoundary.beforePlay)) return;
       if (_completed) {
         final seekRevision = ++_seekRevision;
+        _pendingSeekRevision = seekRevision;
+        _playbackObservationRevision.value++;
         try {
           await _backend.seek(Duration.zero);
         } catch (_) {
           // A newer explicit seek replaces only this rewind. The outstanding
           // manual play intent still applies to the newer requested position.
           if (seekRevision == _seekRevision) rethrow;
+        } finally {
+          if (_pendingSeekRevision == seekRevision) {
+            _pendingSeekRevision = null;
+            _playbackObservationRevision.value++;
+          }
         }
         if (!_disposed &&
             intent == _playIntent &&
@@ -806,6 +933,8 @@ class PlayerService extends GetxService {
     final target = _clampPosition(value);
     final generation = _loadGeneration;
     final revision = ++_seekRevision;
+    _pendingSeekRevision = revision;
+    _playbackObservationRevision.value++;
     bool valid() =>
         !_disposed &&
         generation == _loadGeneration &&
@@ -818,6 +947,11 @@ class PlayerService extends GetxService {
       }
     } catch (_) {
       if (valid()) errorMessage.value = '暂时无法跳转到该位置，请重试。';
+    } finally {
+      if (_pendingSeekRevision == revision) {
+        _pendingSeekRevision = null;
+        _playbackObservationRevision.value++;
+      }
     }
   }
 
@@ -864,6 +998,7 @@ class PlayerService extends GetxService {
   }
 
   Future<void> _clearSelection() async {
+    _playNextIds.clear();
     _playbackGuard?.onManualSelection(null);
     final request = _beginSelection();
     ++_loadGeneration;

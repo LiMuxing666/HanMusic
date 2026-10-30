@@ -3,7 +3,10 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../models/app_settings.dart';
 import '../models/play_mode.dart';
+import '../models/play_history_entry.dart';
+import '../models/playlist.dart';
 import '../models/song.dart';
 
 /// Versioned local state. Sleep timers deliberately do not survive a restart.
@@ -11,6 +14,9 @@ class AppSnapshot {
   const AppSnapshot({
     this.songs = const [],
     this.queue = const [],
+    this.playlists = const [],
+    this.history = const [],
+    this.settings = const AppSettings(),
     this.currentId,
     this.position = Duration.zero,
     this.mode = PlayMode.sequential,
@@ -20,6 +26,9 @@ class AppSnapshot {
 
   final List<Song> songs;
   final List<Song> queue;
+  final List<Playlist> playlists;
+  final List<PlayHistoryEntry> history;
+  final AppSettings settings;
   final String? currentId;
   final Duration position;
   final PlayMode mode;
@@ -28,9 +37,12 @@ class AppSnapshot {
 
   Map<String, Object?> toJson() {
     final result = <String, Object?>{
-      'schemaVersion': 2,
+      'schemaVersion': 5,
       'songs': songs.map((song) => song.toJson()).toList(),
       'queue': queue.map((song) => song.toJson()).toList(),
+      'playlists': playlists.map((playlist) => playlist.toJson()).toList(),
+      'history': history.map((entry) => entry.toJson()).toList(),
+      'settings': settings.toJson(),
       'currentId': currentId,
       'positionMs': position.inMilliseconds,
       'mode': mode.name,
@@ -45,10 +57,10 @@ class AppSnapshot {
 
   factory AppSnapshot.fromJson(Map<String, dynamic> json) {
     final version = json['schemaVersion'];
-    if (version is int && version > 2) {
+    if (version is int && version > 5) {
       throw const UnsupportedStateVersion();
     }
-    if (version is! int || (version != 1 && version != 2)) {
+    if (version is! int || version < 1 || version > 5) {
       throw const FormatException('Invalid schema version.');
     }
     List<Song> readSongs(String key) {
@@ -61,9 +73,9 @@ class AppSnapshot {
         }
         final song = Song.fromJson(item);
         if (song.isOnline) {
-          if (version != 2 || key != 'queue') {
+          if (version < 2 || key != 'queue') {
             throw const FormatException(
-              'Online songs belong only in a version-2 queue.',
+              'Online songs belong only in a version-2-or-later queue.',
             );
           }
           unique[song.id] = song;
@@ -82,6 +94,56 @@ class AppSnapshot {
         unique[song.id] = song;
       }
       return List.unmodifiable(unique.values);
+    }
+
+    List<Playlist> readPlaylists() {
+      if (version < 3) return const [];
+      final data = json['playlists'];
+      if (data is! List) throw const FormatException('Invalid playlists.');
+      final ids = <String>{};
+      final names = <String>{};
+      final playlists = <Playlist>[];
+      for (final item in data) {
+        if (item is! Map<String, dynamic>) {
+          throw const FormatException('Invalid playlist entry.');
+        }
+        final playlist = Playlist.fromJson(item);
+        if (!ids.add(playlist.id) || !names.add(playlist.name.toLowerCase())) {
+          throw const FormatException('Duplicate playlist identity or name.');
+        }
+        playlists.add(playlist);
+      }
+      return List.unmodifiable(playlists);
+    }
+
+    List<PlayHistoryEntry> readHistory() {
+      if (version < 4) return const [];
+      final data = json['history'];
+      if (data is! List || data.length > 200) {
+        throw const FormatException('Invalid playback history.');
+      }
+      final ids = <String>{};
+      final entries = <PlayHistoryEntry>[];
+      for (final item in data) {
+        if (item is! Map<String, dynamic>) {
+          throw const FormatException('Invalid playback history entry.');
+        }
+        final entry = PlayHistoryEntry.fromJson(item);
+        if (!ids.add(entry.song.id)) {
+          throw const FormatException('Duplicate playback history identity.');
+        }
+        entries.add(entry);
+      }
+      return List.unmodifiable(entries);
+    }
+
+    AppSettings readSettings() {
+      if (version < 5) return const AppSettings();
+      final data = json['settings'];
+      if (data is! Map<String, dynamic>) {
+        throw const FormatException('Invalid application settings.');
+      }
+      return AppSettings.fromJson(data);
     }
 
     final position = json['positionMs'];
@@ -104,6 +166,9 @@ class AppSnapshot {
     return AppSnapshot(
       songs: readSongs('songs'),
       queue: readSongs('queue'),
+      playlists: readPlaylists(),
+      history: readHistory(),
+      settings: readSettings(),
       currentId: currentId as String?,
       position: Duration(milliseconds: position),
       mode: PlayMode.values.firstWhere((item) => item.name == mode),
@@ -181,6 +246,9 @@ class FileAppStateStore implements AppStateStore {
     final data = AppSnapshot(
       songs: List.unmodifiable(snapshot.songs),
       queue: List.unmodifiable(snapshot.queue),
+      playlists: List.unmodifiable(snapshot.playlists),
+      history: List.unmodifiable(snapshot.history),
+      settings: snapshot.settings,
       currentId: snapshot.currentId,
       position: snapshot.position,
       mode: snapshot.mode,

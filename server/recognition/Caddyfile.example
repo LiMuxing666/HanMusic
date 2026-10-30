@@ -1,0 +1,16 @@
+# Replace this hostname, point its DNS A/AAAA at the host, and allow TCP 80/443.
+# Caddy runs on the host, outside the container; the container uses host networking.
+recognize.example.com {
+    request_body {
+        max_size 8388608
+    }
+    reverse_proxy 127.0.0.1:8787 {
+        # A single proxy: overwrite, do not append untrusted client XFF.
+        header_up X-Forwarded-For {remote_host}
+        transport http {
+            dial_timeout 3s
+            response_header_timeout 35s
+        }
+    }
+    # Do not enable request/body debug logging or put the token in this file.
+}

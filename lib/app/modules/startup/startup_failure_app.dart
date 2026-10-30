@@ -9,17 +9,21 @@ class StartupFailureApp extends StatelessWidget {
     required this.message,
     required this.onExit,
     this.dataDirectory,
+    this.themeMode = ThemeMode.system,
   });
 
   final String message;
   final VoidCallback onExit;
   final String? dataDirectory;
+  final ThemeMode themeMode;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
     title: 'HanMusic',
     debugShowCheckedModeBanner: false,
     theme: HanMusicTheme.light,
+    darkTheme: HanMusicTheme.dark,
+    themeMode: themeMode,
     home: Scaffold(
       body: SafeArea(
         child: Center(

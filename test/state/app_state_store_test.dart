@@ -193,7 +193,7 @@ void main() {
     await store.save(AppSnapshot(songs: [song]));
     await store.save(AppSnapshot(songs: [song]));
     final primary = File('${directory.path}/state.json');
-    const futureData = '{"schemaVersion":3,"unrecognizedUserData":"keep"}';
+    const futureData = '{"schemaVersion":6,"unrecognizedUserData":"keep"}';
     await primary.writeAsString(futureData);
     final newer = FileAppStateStore(directory);
     expect((await newer.load()).songs, isEmpty);
@@ -231,7 +231,7 @@ void main() {
         ),
       );
       final text = await primary.readAsString();
-      expect(jsonDecode(text)['schemaVersion'], 2);
+      expect(jsonDecode(text)['schemaVersion'], 5);
       expect(text, contains('hanmusic://track/source/remote-A'));
       expect(text, isNot(contains('https://')));
       final restored = await FileAppStateStore(directory).load();

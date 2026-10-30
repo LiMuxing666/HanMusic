@@ -3,8 +3,11 @@ import 'dart:async';
 import 'package:get/get.dart';
 
 import '../data/repositories/app_state_store.dart';
+import 'app_settings_service.dart';
 import 'library_service.dart';
 import 'player_service.dart';
+import 'playlist_service.dart';
+import 'play_history_service.dart';
 
 /// Coalesces imports and slider updates; playback position checkpoints at 5s.
 class AppPersistenceService extends GetxService {
@@ -13,11 +16,17 @@ class AppPersistenceService extends GetxService {
     required this.library,
     required this.player,
     required this.onError,
+    this.playlists,
+    this.history,
+    this.settings,
   });
 
   final AppStateStore store;
   final LibraryService library;
   final PlayerService player;
+  final PlaylistService? playlists;
+  final PlayHistoryService? history;
+  final AppSettingsService? settings;
   final void Function(String message) onError;
   final _workers = <Worker>[];
   Timer? _debounce;
@@ -25,6 +34,7 @@ class AppPersistenceService extends GetxService {
   bool _closed = false;
   bool _started = false;
   bool _libraryChanged = false;
+  AppSnapshot? _preservedSnapshot;
 
   void start() {
     if (_started || _closed) return;
@@ -44,6 +54,15 @@ class AppPersistenceService extends GetxService {
         if (!player.isPlaying.value) _schedule();
       }),
     ]);
+    if (playlists case final service?) {
+      _workers.add(ever(service.playlists, (_) => _schedule()));
+    }
+    if (history case final service?) {
+      _workers.add(ever(service.entries, (_) => _schedule()));
+    }
+    if (settings case final service?) {
+      _workers.add(ever(service.settings, (_) => _schedule()));
+    }
     _checkpoint = Timer.periodic(const Duration(seconds: 5), (_) {
       if (player.isPlaying.value) unawaited(flush());
     });
@@ -65,11 +84,24 @@ class AppPersistenceService extends GetxService {
       if (_libraryChanged) {
         _libraryChanged = false;
         player.updateSongs(library.songs.toList());
+        playlists?.updateSongs(library.songs.toList());
+        history?.updateSongs(library.songs.toList());
       }
+      // Older probes may omit newer services. Preserve their saved state
+      // rather than replacing user data with empty defaults during a checkpoint.
+      if (playlists == null || history == null || settings == null) {
+        _preservedSnapshot ??= await store.load();
+      }
+      final savedPlaylists = playlists == null
+          ? _preservedSnapshot!.playlists
+          : playlists!.playlists.toList();
       await store.save(
         AppSnapshot(
           songs: library.songs.toList(),
           queue: player.queue.toList(),
+          playlists: savedPlaylists,
+          history: history?.entries.toList() ?? _preservedSnapshot!.history,
+          settings: settings?.settings.value ?? _preservedSnapshot!.settings,
           currentId: player.currentSong.value?.id,
           position: player.position.value,
           mode: player.playMode.value,

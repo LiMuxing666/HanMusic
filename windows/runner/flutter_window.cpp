@@ -4,6 +4,8 @@
 #include <flutter/standard_method_codec.h>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "desktop_media_bridge.h"
+#include "music_capture_bridge.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -26,6 +28,10 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  desktop_media_ = std::make_unique<DesktopMediaBridge>(
+      GetHandle(), flutter_controller_->engine()->messenger());
+  music_capture_ = std::make_unique<MusicCaptureBridge>(
+      GetHandle(), flutter_controller_->engine()->messenger());
   power_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
           flutter_controller_->engine()->messenger(), "hanmusic/power",
@@ -47,6 +53,8 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  music_capture_.reset();
+  desktop_media_.reset();
   if (power_notification_) {
     UnregisterSuspendResumeNotification(power_notification_);
     power_notification_ = nullptr;
@@ -63,6 +71,15 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  LRESULT media_result = 0;
+  if (music_capture_ &&
+      music_capture_->HandleMessage(message, wparam, lparam, &media_result)) {
+    return media_result;
+  }
+  if (desktop_media_ &&
+      desktop_media_->HandleMessage(message, wparam, lparam, &media_result)) {
+    return media_result;
+  }
   const bool resumed =
       message == WM_POWERBROADCAST &&
       (wparam == PBT_APMRESUMEAUTOMATIC || wparam == PBT_APMRESUMESUSPEND);

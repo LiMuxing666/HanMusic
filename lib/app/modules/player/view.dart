@@ -1,22 +1,38 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
+import '../../core/theme/app_theme.dart';
+
 import 'controller.dart';
+import 'playback_shortcuts.dart';
 import '../online/controller.dart';
 import '../online/view.dart';
+import '../settings/view.dart';
+import '../recognition/view.dart';
 import '../shared/music_search_field.dart';
 import '../../data/models/song.dart';
+import '../../data/models/library_sort.dart';
 import '../../data/models/play_mode.dart';
+import '../../data/models/playlist.dart';
+import '../../data/models/play_history_entry.dart';
+import '../../data/repositories/playlist_transfer.dart';
 import '../../data/models/queue_add_result.dart';
 import '../../data/models/sleep_timer_mode.dart';
+import '../../services/song_file_actions.dart';
+import '../../services/lyrics_service.dart';
+import '../../services/music_recognition_service.dart';
+import '../../data/models/lyrics.dart';
 
 part 'library_widgets.dart';
-
-const _muted = Color(0xFF738077);
-const _green = Color(0xFF256747);
+part 'playlist_widgets.dart';
+part 'add_to_playlist_dialog.dart';
+part 'song_details_dialog.dart';
+part 'lyrics_widgets.dart';
+part 'history_widgets.dart';
 
 /// Counts row element lifecycle events in an explicitly instrumented PlayerPage.
 /// This does not count Text or RenderParagraph allocations.
@@ -75,7 +91,13 @@ class PlayerPage extends StatelessWidget {
   final LibraryRowLifecycleDiagnostics? libraryRowDiagnostics;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => PlayerPlaybackShortcuts(
+    controller: controller,
+    autofocus: !controller.hasLibrary,
+    child: _buildPage(context),
+  );
+
+  Widget _buildPage(BuildContext context) {
     if (controller.hasLibrary) {
       return _LibraryPlayerPage(
         controller: controller,
@@ -125,10 +147,13 @@ class PlayerPage extends StatelessWidget {
                             const SizedBox(height: 20),
                             _SleepTimerCard(controller: controller),
                             const SizedBox(height: 18),
-                            const Text(
+                            Text(
                               '音乐在本地，心情在此刻。',
                               textAlign: TextAlign.center,
-                              style: TextStyle(fontSize: 12, color: _muted),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: HanMusicColors.of(context).muted,
+                              ),
                             ),
                           ],
                         ),
@@ -311,7 +336,10 @@ class _Header extends StatelessWidget {
             children: [
               Text('本地播放', style: Theme.of(context).textTheme.headlineMedium),
               const SizedBox(height: 7),
-              const Text('让喜欢的声音，陪你慢下来。', style: TextStyle(color: _muted)),
+              Text(
+                '让喜欢的声音，陪你慢下来。',
+                style: TextStyle(color: HanMusicColors.of(context).muted),
+              ),
             ],
           ),
         ),
@@ -348,7 +376,7 @@ class _Panel extends StatelessWidget {
       padding: padding,
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
-        border: Border.all(color: const Color(0xFFE4EAE1)),
+        border: Border.all(color: HanMusicColors.of(context).border),
         borderRadius: BorderRadius.circular(22),
       ),
       child: child,
@@ -376,10 +404,10 @@ class _SongCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                const Text(
+                Text(
                   'NOW PLAYING',
                   style: TextStyle(
-                    color: _green,
+                    color: Theme.of(context).colorScheme.primary,
                     fontWeight: FontWeight.w700,
                     fontSize: 11,
                     letterSpacing: 2,
@@ -410,9 +438,12 @@ class _SongCard extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             if (song == null)
-              const Text(
+              Text(
                 '选择电脑中的音乐文件，\n把此刻交给熟悉的旋律。',
-                style: TextStyle(color: _muted, height: 1.8),
+                style: TextStyle(
+                  color: HanMusicColors.of(context).muted,
+                  height: 1.8,
+                ),
               )
             else ...[
               _SongMetadataLine(
@@ -432,10 +463,10 @@ class _SongCard extends StatelessWidget {
                   message: song.path,
                   child: Row(
                     children: [
-                      const Icon(
+                      Icon(
                         Icons.audio_file_outlined,
                         size: 17,
-                        color: _muted,
+                        color: HanMusicColors.of(context).muted,
                       ),
                       const SizedBox(width: 7),
                       Expanded(
@@ -443,7 +474,9 @@ class _SongCard extends StatelessWidget {
                           song.fileName,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: _muted),
+                          style: TextStyle(
+                            color: HanMusicColors.of(context).muted,
+                          ),
                         ),
                       ),
                     ],
@@ -469,7 +502,7 @@ class _SongCard extends StatelessWidget {
             ],
             const SizedBox(height: 18),
             if (loading)
-              const Row(
+              Row(
                 children: [
                   SizedBox.square(
                     dimension: 14,
@@ -478,14 +511,20 @@ class _SongCard extends StatelessWidget {
                   SizedBox(width: 9),
                   Text(
                     '正在准备音乐…',
-                    style: TextStyle(fontSize: 12, color: _muted),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: HanMusicColors.of(context).muted,
+                    ),
                   ),
                 ],
               )
             else if (song == null)
-              const Text(
+              Text(
                 '支持 MP3、FLAC、WAV、M4A、OGG',
-                style: TextStyle(color: _muted, fontSize: 12),
+                style: TextStyle(
+                  color: HanMusicColors.of(context).muted,
+                  fontSize: 12,
+                ),
               ),
           ],
         );
@@ -531,7 +570,7 @@ class _SongMetadataLine extends StatelessWidget {
     message: text,
     child: Row(
       children: [
-        Icon(icon, size: 17, color: _muted),
+        Icon(icon, size: 17, color: HanMusicColors.of(context).muted),
         const SizedBox(width: 7),
         Expanded(
           child: Text(
@@ -539,7 +578,7 @@ class _SongMetadataLine extends StatelessWidget {
             key: valueKey,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: _muted),
+            style: TextStyle(color: HanMusicColors.of(context).muted),
           ),
         ),
       ],
@@ -613,7 +652,7 @@ class _MusicArtwork extends StatelessWidget {
               left: -size * .2,
               child: _ArtworkRing(
                 size: size * 1.13,
-                color: _green.withValues(alpha: .1),
+                color: const Color(0xFF256747).withValues(alpha: .1),
               ),
             ),
             Container(
@@ -672,12 +711,19 @@ class _StatusTag extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
       decoration: BoxDecoration(
-        color: active ? const Color(0xFFE6F2DF) : const Color(0xFFF0F3EC),
+        color: active
+            ? HanMusicColors.of(context).selectedSurface
+            : HanMusicColors.of(context).subtleSurface,
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(
         label,
-        style: TextStyle(fontSize: 11, color: active ? _green : _muted),
+        style: TextStyle(
+          fontSize: 11,
+          color: active
+              ? Theme.of(context).colorScheme.primary
+              : HanMusicColors.of(context).muted,
+        ),
       ),
     );
   }
@@ -689,8 +735,10 @@ class _DetailLabel extends StatelessWidget {
   final String text;
 
   @override
-  Widget build(BuildContext context) =>
-      Text(text, style: const TextStyle(fontSize: 12, color: _muted));
+  Widget build(BuildContext context) => Text(
+    text,
+    style: TextStyle(fontSize: 12, color: HanMusicColors.of(context).muted),
+  );
 }
 
 class _PlaybackCard extends StatelessWidget {
@@ -766,7 +814,10 @@ class _PlaybackCard extends StatelessWidget {
                         ? '享受此刻的旋律'
                         : '准备好，继续聆听',
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 13, color: _muted),
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: HanMusicColors.of(context).muted,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -813,7 +864,7 @@ class _VolumeButton extends StatelessWidget {
             ? Icons.volume_down_rounded
             : Icons.volume_up_rounded,
         size: 22,
-        color: _muted,
+        color: HanMusicColors.of(context).muted,
       ),
     );
   });
@@ -898,11 +949,17 @@ class _ProgressSliderState extends State<_ProgressSlider> {
             children: [
               Text(
                 _formatTime(displayed),
-                style: const TextStyle(fontSize: 12, color: _muted),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: HanMusicColors.of(context).muted,
+                ),
               ),
               Text(
                 _formatTime(widget.duration),
-                style: const TextStyle(fontSize: 12, color: _muted),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: HanMusicColors.of(context).muted,
+                ),
               ),
             ],
           ),
@@ -931,12 +988,12 @@ class _SleepTimerCard extends StatelessWidget {
                 width: 43,
                 height: 43,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFECF1E5),
+                  color: HanMusicColors.of(context).subtleSurface,
                   borderRadius: BorderRadius.circular(13),
                 ),
-                child: const Icon(
+                child: Icon(
                   Icons.bedtime_outlined,
-                  color: _green,
+                  color: Theme.of(context).colorScheme.primary,
                   size: 21,
                 ),
               ),
@@ -967,7 +1024,9 @@ class _SleepTimerCard extends StatelessWidget {
                       _sleepTimerSummary(controller),
                       style: TextStyle(
                         fontSize: 12,
-                        color: active ? _green : _muted,
+                        color: active
+                            ? Theme.of(context).colorScheme.primary
+                            : HanMusicColors.of(context).muted,
                       ),
                     ),
                   ],
@@ -1066,7 +1125,10 @@ class _SleepTimerDialogState extends State<_SleepTimerDialog> {
                     : widget.controller.timerStatusMessage.value ??
                           '设置后自动暂停，保留队列和播放位置。',
                 key: const Key('sleep-timer-status'),
-                style: const TextStyle(color: _green, fontSize: 13),
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.primary,
+                  fontSize: 13,
+                ),
               ),
             ),
             const SizedBox(height: 18),
@@ -1129,13 +1191,19 @@ class _SleepTimerDialogState extends State<_SleepTimerDialog> {
                 widget.controller.canStopAfterCurrentSong
                     ? '按曲结束绑定当前歌曲，手动切歌会取消；暂停和拖动进度不影响。'
                     : '先选择一首可播放的歌曲，再设置按曲结束。',
-                style: const TextStyle(color: _muted, fontSize: 12),
+                style: TextStyle(
+                  color: HanMusicColors.of(context).muted,
+                  fontSize: 12,
+                ),
               ),
             ),
             const SizedBox(height: 10),
-            const Text(
+            Text(
               '新设定会替换旧任务。退出应用后，定时失效。',
-              style: TextStyle(color: _muted, fontSize: 12),
+              style: TextStyle(
+                color: HanMusicColors.of(context).muted,
+                fontSize: 12,
+              ),
             ),
             Obx(
               () => widget.controller.timerActive
@@ -1213,22 +1281,25 @@ class _ErrorNotice extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.fromLTRB(16, 9, 8, 9),
         decoration: BoxDecoration(
-          color: const Color(0xFFFFF0E9),
+          color: HanMusicColors.of(context).warningSurface,
           borderRadius: BorderRadius.circular(13),
-          border: Border.all(color: const Color(0xFFF1D9CB)),
+          border: Border.all(color: HanMusicColors.of(context).warningBorder),
         ),
         child: Row(
           children: [
-            const Icon(
+            Icon(
               Icons.info_outline_rounded,
-              color: Color(0xFF945036),
+              color: HanMusicColors.of(context).onWarning,
               size: 21,
             ),
             const SizedBox(width: 11),
             Expanded(
               child: Text(
                 message,
-                style: const TextStyle(color: Color(0xFF7D4835), fontSize: 13),
+                style: TextStyle(
+                  color: HanMusicColors.of(context).onWarning,
+                  fontSize: 13,
+                ),
               ),
             ),
             if (onRetry != null)
@@ -1240,10 +1311,10 @@ class _ErrorNotice extends StatelessWidget {
             IconButton(
               tooltip: '关闭提示',
               onPressed: onDismiss,
-              icon: const Icon(
+              icon: Icon(
                 Icons.close_rounded,
                 size: 19,
-                color: Color(0xFF945036),
+                color: HanMusicColors.of(context).onWarning,
               ),
             ),
           ],

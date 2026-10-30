@@ -66,7 +66,7 @@ packages:
     source: hosted
     version: "1.4.1"
   charset:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: charset
       sha256: "27802032a581e01ac565904ece8c8962564b1070690794f0072f6865958ce8b9"
@@ -377,7 +377,7 @@ packages:
     source: hosted
     version: "0.13.0"
   media_kit:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: media_kit
       sha256: ae9e79597500c7ad6083a3c7b7b7544ddabfceacce7ae5c9709b0ec16a5d6643
