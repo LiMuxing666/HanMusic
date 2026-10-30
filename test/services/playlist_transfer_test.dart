@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:charset/charset.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:han_music/app/data/models/playlist.dart';
 import 'package:han_music/app/data/models/song.dart';
@@ -35,6 +36,261 @@ Map<String, dynamic> _json() =>
 List<int> _bytes(Object value) => utf8.encode(jsonEncode(value));
 
 void main() {
+  test(
+    'M3U8 resolves local relative paths and preserves first order and metadata',
+    () {
+      final document = PlaylistTransferCodec.decode(
+        utf8.encode(
+          '\uFEFF#EXTM3U\r\n'
+          '#EXTINF:12.5,中文标题\r\n'
+          r'..\音乐\风.mp3'
+          '\r\n'
+          'D:/音乐/风.MP3\r\n'
+          '#EXTINF:-1,另一个标题\r\n'
+          'file:///D:/%E9%9F%B3%E4%B9%90/%E6%B5%B7%20%26%20(%E6%99%9A).flac\r\n',
+        ),
+        sourcePath: 'D:/lists/旅行.m3u8',
+      );
+      expect(document.name, '旅行');
+      expect(document.formatLabel, 'M3U8 · UTF-8');
+      expect(document.duplicateCount, 1);
+      expect(document.skippedCount, 0);
+      expect(document.songs.map((song) => song.path), [
+        r'D:\音乐\风.mp3',
+        r'D:\音乐\海 & (晚).flac',
+      ]);
+      expect(document.songs.first.trackTitle, '中文标题');
+      expect(
+        document.songs.first.duration,
+        const Duration(milliseconds: 12500),
+      );
+      expect(document.songs.last.duration, isNull);
+      expect(document.songs.every((song) => song.isMissing), isTrue);
+      expect(() => document.songs.clear(), throwsUnsupportedError);
+    },
+  );
+
+  test('M3U detects strict UTF8 or GBK while M3U8 never guesses GBK', () {
+    final text = '#EXTM3U\n音乐/风.mp3\n';
+    final encoded = gbk.encode(text);
+    final gbkDocument = PlaylistTransferCodec.decode(
+      encoded,
+      sourcePath: 'D:/旅行.m3u',
+    );
+    expect(gbkDocument.formatLabel, 'M3U · GBK');
+    expect(gbkDocument.songs.single.id, _local.id);
+    expect(
+      PlaylistTransferCodec.decode(
+        utf8.encode(text),
+        sourcePath: 'D:/旅行.M3U',
+      ).formatLabel,
+      'M3U · UTF-8',
+    );
+    expect(
+      () => PlaylistTransferCodec.decode(encoded, sourcePath: 'D:/旅行.m3u8'),
+      throwsFormatException,
+    );
+    for (final bytes in <List<int>>[
+      [0xff, 0xfe, 35, 0],
+      [0xfe, 0xff, 0, 35],
+      [0x81],
+      [0xef, 0xbb, 0xbf, ...encoded],
+      utf8.encode('D:/bad\u0000.mp3'),
+    ]) {
+      expect(
+        () => PlaylistTransferCodec.decode(bytes, sourcePath: 'D:/旅行.m3u'),
+        throwsFormatException,
+      );
+    }
+  });
+
+  test(
+    'M3U skips remote, device, ADS and nested playlists without leaking metadata',
+    () {
+      final rejected = [
+        'https://example.invalid/song.mp3?token=secret',
+        'ftp://example.invalid/song.flac',
+        'file://server/share/song.mp3',
+        r'\\server\share\song.mp3',
+        r'\\?\D:\device.mp3',
+        r'\\.\device.mp3',
+        'D:/song:stream.mp3',
+        'C:ambiguous.mp3',
+        '/root-relative.mp3',
+        r'\root-relative.mp3',
+        'nested.m3u',
+        'nested.m3u8',
+        'nested.json',
+        'folder',
+        'picture.png',
+        'D:/CON.mp3',
+        'D:/folder./track.mp3',
+      ];
+      final text =
+          '#EXTM3U\n#EXTVLCOPT:http-proxy=example.invalid\n'
+          '#EXTINF:123,必须丢弃的标题\n${rejected.join('\n')}\n'
+          'good.mp3\n';
+      final document = PlaylistTransferCodec.decode(
+        utf8.encode(text),
+        sourcePath: 'D:/lists/test.m3u8',
+      );
+      expect(document.skippedCount, rejected.length);
+      expect(document.songs.single.path, r'D:\lists\good.mp3');
+      expect(document.songs.single.trackTitle, isNull);
+      expect(document.songs.single.duration, isNull);
+      for (final text in [
+        '#EXTM3U\n#EXT-X-TARGETDURATION:10\nD:/part.aac',
+        'https://example.invalid/song.mp3\n',
+      ]) {
+        expect(
+          () => PlaylistTransferCodec.decode(
+            utf8.encode(text),
+            sourcePath: 'D:/lists/test.m3u8',
+          ),
+          throwsFormatException,
+        );
+      }
+    },
+  );
+
+  test(
+    'M3U limits count all entry lines before filtering or deduplication',
+    () {
+      for (final text in [
+        'D:/same.mp3\n' * (PlaylistTransferCodec.maxSongs + 1),
+        '# comment\n' * (PlaylistTransferCodec.maxTextLines + 1),
+        '${'a' * 4097}.mp3\n',
+      ]) {
+        expect(
+          () => PlaylistTransferCodec.decode(
+            utf8.encode(text),
+            sourcePath: 'D:/list.m3u8',
+          ),
+          throwsFormatException,
+        );
+      }
+      expect(
+        () => PlaylistTransferCodec.decode(
+          List.filled(PlaylistTransferCodec.maxFileBytes + 1, 32),
+          sourcePath: 'D:/list.m3u8',
+        ),
+        throwsFormatException,
+      );
+    },
+  );
+
+  test(
+    'M3U8 output is UTF8 local-only and preserves missing paths and duration',
+    () {
+      final bytes = PlaylistTransferCodec.encode(
+        name: '分享',
+        songs: [_local, _online],
+        outputFormat: PlaylistTransferFormat.m3u8,
+      );
+      final text = utf8.decode(bytes, allowMalformed: false);
+      expect(text, startsWith('#EXTM3U\r\n'));
+      expect(text, contains(r'D:\音乐\风.mp3'));
+      expect(text, isNot(contains('hanmusic:')));
+      expect(text, isNot(contains('在线歌曲')));
+      final result = PlaylistTransferCodec.decode(
+        bytes,
+        sourcePath: 'D:/分享.m3u8',
+      );
+      expect(result.songs.single.id, _local.id);
+      expect(result.songs.single.title, _local.title);
+      expect(result.songs.single.duration, _local.duration);
+      expect(result.songs.single.isMissing, isTrue);
+      expect(
+        PlaylistTransferCodec.suggestedFileName(
+          '分享',
+          outputFormat: PlaylistTransferFormat.m3u8,
+        ),
+        'HanMusic-分享.m3u8',
+      );
+      expect(
+        () => PlaylistTransferCodec.encode(
+          name: '在线',
+          songs: [_online],
+          outputFormat: PlaylistTransferFormat.m3u8,
+        ),
+        throwsFormatException,
+      );
+    },
+  );
+
+  test(
+    'M3U import probes only accepted local entries and preserves its report',
+    () async {
+      final files = _Files()
+        ..importPath = 'D:/lists/test.m3u8'
+        ..importBytes = utf8.encode(
+          'D:/music/present.mp3\nD:/music/missing.flac\n'
+          'D:/music/PRESENT.MP3\nhttps://example.invalid/remote.mp3\nnested.m3u8\n',
+        )
+        ..exists = (uri) async => uri.path.endsWith('present.mp3');
+      final document = await PlaylistTransfer(
+        files: files,
+      ).importPlaylist(canCommit: () => true);
+      expect(files.probed.map((uri) => uri.toFilePath(windows: true)), [
+        r'D:\music\present.mp3',
+        r'D:\music\missing.flac',
+      ]);
+      expect(document!.songs.map((song) => song.isMissing), [false, true]);
+      expect(document.skippedCount, 2);
+      expect(document.duplicateCount, 1);
+      expect(document.formatLabel, 'M3U8 · UTF-8');
+      expect(files.writes, 0);
+    },
+  );
+
+  test(
+    'M3U8 native writer numbers conflicts using the selected extension',
+    () async {
+      final directory = await Directory.systemTemp.createTemp('hanmusic-m3u8-');
+      addTearDown(() => directory.delete(recursive: true));
+      final original = File(path.join(directory.path, '分享.m3u8'));
+      await original.writeAsString('existing');
+      final files = LocalPlaylistTransferFiles();
+      final saved = await files.write(
+        original.path,
+        PlaylistTransferCodec.encode(
+          name: '分享',
+          songs: [_local],
+          outputFormat: PlaylistTransferFormat.m3u8,
+        ),
+        canCommit: () => true,
+      );
+      expect(saved, endsWith('分享 (2).m3u8'));
+      expect(await original.readAsString(), 'existing');
+      expect(
+        PlaylistTransferCodec.decode(
+          await File(saved).readAsBytes(),
+          sourcePath: saved,
+        ).songs.single.id,
+        _local.id,
+      );
+      expect(directory.listSync().whereType<Directory>(), isEmpty);
+    },
+  );
+
+  test(
+    'M3U8 export with no local songs performs no file-picker or write work',
+    () async {
+      final files = _Files();
+      await expectLater(
+        PlaylistTransfer(files: files).exportPlaylist(
+          name: '在线',
+          songs: [_online],
+          canCommit: () => true,
+          outputFormat: PlaylistTransferFormat.m3u8,
+        ),
+        throwsFormatException,
+      );
+      expect(files.exportPicks, 0);
+      expect(files.writes, 0);
+    },
+  );
+
   test('mixed local and online metadata round trips in exact song order', () {
     final bytes = _encoded();
     final decoded = PlaylistTransferCodec.decode(bytes);
@@ -412,12 +668,16 @@ class _Files implements PlaylistTransferFiles {
   List<int>? importBytes;
   Future<bool> Function(Uri)? exists;
   final probed = <Uri>[];
-  int reads = 0, writes = 0, commits = 0;
+  int reads = 0, writes = 0, commits = 0, exportPicks = 0;
   @override
   Future<String?> pickImport() async =>
       importGate == null ? importPath : await importGate!.future;
   @override
-  Future<String?> pickExport(String suggestedFileName) async => exportPath;
+  Future<String?> pickExport(String suggestedFileName) async {
+    exportPicks++;
+    return exportPath;
+  }
+
   @override
   Future<List<int>> read(String filePath, int maxBytes) async {
     reads++;

@@ -83,7 +83,14 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
   final _zeroCount = 0.obs;
   final _emptyStatus = RxnString();
   bool _closed = false;
-  bool _exitPending = false;
+  final _exitPendingState = false.obs;
+  bool get _exitPending => _exitPendingState.value;
+  set _exitPending(bool value) => _exitPendingState.value = value;
+  // Per-song adjustments last for this application session, without modifying
+  // the sidecar or persisted library. Bound memory during very long sessions.
+  final _lyricsOffsets = <String, int>{};
+  final lyricsTimingRevision = 0.obs;
+  static const maxLyricsOffsetMilliseconds = 30000;
   double _unmuteVolume = 0.7;
   int _importGeneration = 0;
   int? _activeImport;
@@ -723,6 +730,52 @@ class PlayerController extends GetxController with WidgetsBindingObserver {
   }
 
   Future<void> seek(Duration value) => _player.seek(value);
+
+  int get lyricsOffsetMilliseconds {
+    lyricsTimingRevision.value;
+    return _lyricsOffsets[currentSong.value?.id] ?? 0;
+  }
+
+  bool get canSeekLyrics =>
+      acceptsPlaybackCommands &&
+      canPlay &&
+      !isLoading.value &&
+      duration.value > Duration.zero;
+
+  void setLyricsOffset(int milliseconds, {required String songId}) {
+    if (!acceptsPlaybackCommands || currentSong.value?.id != songId) return;
+    final next = milliseconds.clamp(
+      -maxLyricsOffsetMilliseconds,
+      maxLyricsOffsetMilliseconds,
+    );
+    if ((_lyricsOffsets[songId] ?? 0) == next) return;
+    _lyricsOffsets.remove(songId);
+    if (next != 0) {
+      if (_lyricsOffsets.length >= 128) {
+        _lyricsOffsets.remove(_lyricsOffsets.keys.first);
+      }
+      _lyricsOffsets[songId] = next;
+    }
+    lyricsTimingRevision.value++;
+  }
+
+  Future<void> seekToLyricsLine(
+    Duration timestamp, {
+    required String songId,
+    required int selectionRevision,
+  }) async {
+    if (!canSeekLyrics ||
+        currentSong.value?.id != songId ||
+        this.selectionRevision != selectionRevision) {
+      return;
+    }
+    // Positive adjustment delays display and moves the seek target later by
+    // the same amount. The LRC's own offset is already parsed into timestamp.
+    final milliseconds = (timestamp.inMilliseconds + lyricsOffsetMilliseconds)
+        .clamp(0, duration.value.inMilliseconds);
+    await _player.seek(Duration(milliseconds: milliseconds));
+  }
+
   Future<void> setVolume(double value) async {
     if (_closed || _exitPending || !value.isFinite) return;
     final current = volume.value;

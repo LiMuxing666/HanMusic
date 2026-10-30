@@ -13,6 +13,7 @@ class _LyricsCardState extends State<_LyricsCard> {
   final _scroll = ScrollController();
   late Worker _songChanges;
   late Worker _positionChanges;
+  late Worker _offsetChanges;
   late Worker _documentChanges;
   Timer? _resumeFollowing;
   int _activeIndex = -1;
@@ -39,6 +40,9 @@ class _LyricsCardState extends State<_LyricsCard> {
       if (song?.id != _songId) _selectSong(song);
     });
     _positionChanges = ever<Duration>(controller.position, _updatePosition);
+    _offsetChanges = ever<int>(controller.lyricsTimingRevision, (_) {
+      _updatePosition(controller.position.value);
+    });
     _selectSong(controller.currentSong.value);
   }
 
@@ -52,7 +56,11 @@ class _LyricsCardState extends State<_LyricsCard> {
 
   void _updatePosition(Duration position) {
     if (!mounted) return;
-    final next = _lyrics.document.value?.activeIndex(position) ?? -1;
+    final displayPosition = Duration(
+      milliseconds:
+          position.inMilliseconds - controller.lyricsOffsetMilliseconds,
+    );
+    final next = _lyrics.document.value?.activeIndex(displayPosition) ?? -1;
     if (next == _activeIndex) return;
     setState(() => _activeIndex = next);
     _scheduleFollow();
@@ -99,6 +107,7 @@ class _LyricsCardState extends State<_LyricsCard> {
     if (oldWidget.controller != controller) {
       _songChanges.dispose();
       _positionChanges.dispose();
+      _offsetChanges.dispose();
       _bindController();
     }
   }
@@ -108,6 +117,7 @@ class _LyricsCardState extends State<_LyricsCard> {
     _resumeFollowing?.cancel();
     _songChanges.dispose();
     _positionChanges.dispose();
+    _offsetChanges.dispose();
     _documentChanges.dispose();
     _lyrics.onClose();
     _scroll.dispose();
@@ -122,6 +132,9 @@ class _LyricsCardState extends State<_LyricsCard> {
       final document = _lyrics.document.value;
       final message = _lyrics.message.value;
       final song = controller.currentSong.value;
+      final offset = controller.lyricsOffsetMilliseconds;
+      final selectionRevision = controller.selectionRevision;
+      final canSeek = controller.canSeekLyrics;
       final scale = MediaQuery.textScalerOf(context).scale(16) / 16;
       final extent = 92 + (scale - 1).clamp(0.0, 4.0) * 72;
       if (_lineExtent != extent) {
@@ -167,6 +180,62 @@ class _LyricsCardState extends State<_LyricsCard> {
               ),
             ],
           ),
+          if (document?.isTimed == true && song != null) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                TextButton.icon(
+                  key: const Key('lyrics-earlier'),
+                  onPressed:
+                      controller.acceptsPlaybackCommands &&
+                          offset > -PlayerController.maxLyricsOffsetMilliseconds
+                      ? () => controller.setLyricsOffset(
+                          offset - 500,
+                          songId: song.id,
+                        )
+                      : null,
+                  icon: const Icon(Icons.fast_rewind_rounded, size: 18),
+                  label: const Text('提前 0.5 秒'),
+                ),
+                Text(
+                  offset == 0
+                      ? '歌词同步：原始时间'
+                      : '歌词${offset < 0 ? '提前' : '延后'} ${(offset.abs() / 1000).toStringAsFixed(1)} 秒',
+                  key: const Key('lyrics-offset-label'),
+                ),
+                TextButton.icon(
+                  key: const Key('lyrics-later'),
+                  onPressed:
+                      controller.acceptsPlaybackCommands &&
+                          offset < PlayerController.maxLyricsOffsetMilliseconds
+                      ? () => controller.setLyricsOffset(
+                          offset + 500,
+                          songId: song.id,
+                        )
+                      : null,
+                  icon: const Icon(Icons.fast_forward_rounded, size: 18),
+                  label: const Text('延后 0.5 秒'),
+                ),
+                TextButton(
+                  key: const Key('lyrics-reset-offset'),
+                  onPressed: controller.acceptsPlaybackCommands && offset != 0
+                      ? () => controller.setLyricsOffset(0, songId: song.id)
+                      : null,
+                  child: const Text('重置同步'),
+                ),
+              ],
+            ),
+            Text(
+              '点击歌词跳转到对应位置；微调仅在本次运行中记住，不修改歌词文件。',
+              style: TextStyle(
+                color: HanMusicColors.of(context).muted,
+                fontSize: 12,
+              ),
+            ),
+          ],
           const SizedBox(height: 8),
           if (state == LyricsLoadState.loading)
             const Padding(
@@ -233,35 +302,59 @@ class _LyricsCardState extends State<_LyricsCard> {
                       return Semantics(
                         key: ValueKey('lyrics-line-$index'),
                         selected: active,
-                        child: Container(
-                          key: active ? const Key('lyrics-current-line') : null,
-                          alignment: Alignment.center,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color: active
-                                ? HanMusicColors.of(context).selectedSurface
+                        child: InkWell(
+                          key: ValueKey('lyrics-seek-$index'),
+                          borderRadius: BorderRadius.circular(10),
+                          onTap: document.isTimed && song != null && canSeek
+                              ? () {
+                                  if (!identical(
+                                    _lyrics.document.value,
+                                    document,
+                                  )) {
+                                    return;
+                                  }
+                                  _followCurrent();
+                                  unawaited(
+                                    controller.seekToLyricsLine(
+                                      document.timedLines[index].timestamp,
+                                      songId: song.id,
+                                      selectionRevision: selectionRevision,
+                                    ),
+                                  );
+                                }
+                              : null,
+                          child: Container(
+                            key: active
+                                ? const Key('lyrics-current-line')
                                 : null,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Tooltip(
-                            message: line,
-                            child: Text(
-                              line,
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 16,
-                                height: 1.4,
-                                fontWeight: active
-                                    ? FontWeight.w600
-                                    : FontWeight.normal,
-                                color: active
-                                    ? Theme.of(context).colorScheme.primary
-                                    : HanMusicColors.of(context).muted,
+                            alignment: Alignment.center,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              color: active
+                                  ? HanMusicColors.of(context).selectedSurface
+                                  : null,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Tooltip(
+                              message: line,
+                              child: Text(
+                                line,
+                                maxLines: 3,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  height: 1.4,
+                                  fontWeight: active
+                                      ? FontWeight.w600
+                                      : FontWeight.normal,
+                                  color: active
+                                      ? Theme.of(context).colorScheme.primary
+                                      : HanMusicColors.of(context).muted,
+                                ),
                               ),
                             ),
                           ),

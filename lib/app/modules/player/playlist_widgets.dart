@@ -21,6 +21,7 @@ class _PlaylistsViewState extends State<_PlaylistsView> {
   String _selectedId = Playlist.favoritesId;
   String? _notice;
   bool _transferBusy = false;
+  bool _transferReviewing = false;
   late final PlaylistTransfer _transfer;
 
   PlayerController get controller => widget.controller;
@@ -44,6 +45,16 @@ class _PlaylistsViewState extends State<_PlaylistsView> {
     if (mounted) setState(() => _notice = message);
   }
 
+  Future<bool> _confirmTransfer(Widget dialog) async {
+    setState(() => _transferReviewing = true);
+    try {
+      return await showDialog<bool>(context: context, builder: (_) => dialog) ==
+          true;
+    } finally {
+      if (mounted) setState(() => _transferReviewing = false);
+    }
+  }
+
   Future<void> _importPlaylist() async {
     if (_transferBusy || !controller.acceptsPlaybackCommands) return;
     final generation = controller.commandGeneration;
@@ -61,6 +72,18 @@ class _PlaylistsViewState extends State<_PlaylistsView> {
       if (!active()) return;
       if (document == null) {
         _showNotice('已取消导入。');
+        return;
+      }
+      final previewName = PlaylistTransferCodec.uniqueName(
+        document.name,
+        controller.playlists.playlists.map((playlist) => playlist.name),
+      );
+      final confirmed = await _confirmTransfer(
+        _PlaylistImportPreviewDialog(document: document, name: previewName),
+      );
+      if (!active()) return;
+      if (!confirmed) {
+        _showNotice('已取消导入，未创建歌单。');
         return;
       }
       final name = PlaylistTransferCodec.uniqueName(
@@ -96,7 +119,10 @@ class _PlaylistsViewState extends State<_PlaylistsView> {
     }
   }
 
-  Future<void> _exportPlaylist(Playlist playlist) async {
+  Future<void> _exportPlaylist(
+    Playlist playlist, {
+    PlaylistTransferFormat outputFormat = PlaylistTransferFormat.hanmusicJson,
+  }) async {
     if (_transferBusy || !controller.acceptsPlaybackCommands) return;
     final generation = controller.commandGeneration;
     final songs = controller.playlistSongs(playlist.id);
@@ -110,12 +136,63 @@ class _PlaylistsViewState extends State<_PlaylistsView> {
         controller.acceptsPlaybackCommands &&
         controller.commandGeneration == generation;
     try {
+      final localCount = songs
+          .where(PlaylistTransferCodec.canExportM3u8)
+          .length;
+      final onlineCount = songs.where((song) => song.isOnline).length;
+      final otherCount = songs.length - localCount - onlineCount;
+      if (outputFormat == PlaylistTransferFormat.m3u8) {
+        if (localCount == 0) {
+          throw const FormatException('没有可导出的本地音频，请使用 JSON 保存完整歌单。');
+        }
+        if (onlineCount + otherCount > 0) {
+          final confirmed = await _confirmTransfer(
+            Builder(
+              builder: (context) => AlertDialog(
+                title: const Text('导出本地 M3U8 歌单'),
+                content: SingleChildScrollView(
+                  child: Text(
+                    '将导出 $localCount 首本地歌曲，跳过 $onlineCount 首在线歌曲'
+                    '${otherCount == 0 ? '' : '和 $otherCount 条不支持的路径'}。'
+                    '\n缺失的本地音频路径会保留。需要保存完整歌单时，请使用 JSON。',
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    key: const Key('playlist-export-cancel'),
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('取消'),
+                  ),
+                  FilledButton(
+                    key: const Key('playlist-export-confirm'),
+                    onPressed: () => Navigator.of(context).pop(true),
+                    child: const Text('继续导出'),
+                  ),
+                ],
+              ),
+            ),
+          );
+          if (!active()) return;
+          if (!confirmed) {
+            _showNotice('已取消导出。');
+            return;
+          }
+        }
+      }
       final saved = await _transfer.exportPlaylist(
         name: playlist.name,
         songs: songs,
         canCommit: active,
+        outputFormat: outputFormat,
       );
-      if (active()) _showNotice(saved == null ? '已取消导出。' : '已导出到：$saved');
+      if (active()) {
+        _showNotice(
+          saved == null
+              ? '已取消导出。'
+              : '已导出到：$saved'
+                    '${outputFormat == PlaylistTransferFormat.m3u8 ? '（本地 $localCount 首，已跳过 ${onlineCount + otherCount} 条）' : ''}',
+        );
+      }
     } on FormatException catch (error) {
       if (active()) _showNotice(error.message);
     } on TimeoutException {
@@ -335,21 +412,33 @@ class _PlaylistsViewState extends State<_PlaylistsView> {
                         ? () => _exportPlaylist(selected)
                         : null,
                     icon: const Icon(Icons.file_download_outlined, size: 20),
-                    label: const Text('导出当前歌单'),
+                    label: const Text('导出 JSON'),
+                  ),
+                  TextButton.icon(
+                    key: const Key('playlist-export-m3u8'),
+                    onPressed: ready && selected != null
+                        ? () => _exportPlaylist(
+                            selected,
+                            outputFormat: PlaylistTransferFormat.m3u8,
+                          )
+                        : null,
+                    icon: const Icon(Icons.playlist_play_rounded, size: 20),
+                    label: const Text('导出 M3U8'),
                   ),
                 ],
               ),
               const SizedBox(height: 4),
               Text(
                 '导出文件：${PlaylistTransferCodec.suggestedFileName(selected?.name ?? Playlist.favoritesName)}\n'
-                '选择导出文件夹保存 JSON；同名文件自动编号。只记录路径、在线标识与歌曲信息，不复制音频和封面缓存。',
+                '支持导入 JSON、M3U、M3U8，预览确认后创建新歌单。JSON 保存完整信息；M3U8 供其他播放器读取本地音频路径。\n'
+                '选择导出文件夹；同名文件自动编号，不复制音频和封面。',
                 key: const Key('playlist-transfer-help'),
                 style: TextStyle(
                   color: HanMusicColors.of(context).muted,
                   fontSize: 12,
                 ),
               ),
-              if (_transferBusy) ...[
+              if (_transferBusy && !_transferReviewing) ...[
                 const SizedBox(height: 8),
                 const LinearProgressIndicator(
                   key: Key('playlist-transfer-busy'),
@@ -663,6 +752,70 @@ class _PlaylistSongRow extends StatelessWidget {
       ),
     );
   });
+}
+
+class _PlaylistImportPreviewDialog extends StatelessWidget {
+  const _PlaylistImportPreviewDialog({
+    required this.document,
+    required this.name,
+  });
+
+  final PlaylistTransferDocument document;
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final missing = document.songs.where((song) => song.isMissing).length;
+    final online = document.songs.where((song) => song.isOnline).length;
+    return AlertDialog(
+      key: const Key('playlist-import-preview'),
+      title: const Text('导入歌单预览'),
+      content: SingleChildScrollView(
+        child: SizedBox(
+          width: 440,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('新歌单：$name'),
+              const SizedBox(height: 8),
+              Text('格式：${document.formatLabel}'),
+              Text(
+                '共 ${document.songs.length} 首，其中在线 $online 首、缺失 $missing 首。',
+              ),
+              if (document.duplicateCount > 0)
+                Text('已合并 ${document.duplicateCount} 条重复路径，保留首次出现顺序。'),
+              if (document.skippedCount > 0)
+                Text('已跳过 ${document.skippedCount} 条网络地址、非音频或不支持的路径。'),
+              const SizedBox(height: 12),
+              for (final song in document.songs.take(5))
+                Text(
+                  '${song.isMissing ? '缺失 · ' : ''}${song.title}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              if (document.songs.length > 5)
+                Text('还有 ${document.songs.length - 5} 首……'),
+              const SizedBox(height: 12),
+              const Text('缺失项会保留供以后恢复。确认后仅创建歌单，不导入曲库、不改变播放队列。'),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          key: const Key('playlist-import-cancel'),
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          key: const Key('playlist-import-confirm'),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('创建歌单'),
+        ),
+      ],
+    );
+  }
 }
 
 class _PlaylistNameDialog extends StatefulWidget {

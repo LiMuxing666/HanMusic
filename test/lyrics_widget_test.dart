@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:han_music/app/core/theme/app_theme.dart';
 import 'package:han_music/app/data/models/song.dart';
@@ -113,6 +114,11 @@ void main() {
         expect(find.text('纯文本歌词，未检测到有效时间标签。'), findsOneWidget);
         expect(find.byKey(const Key('lyrics-follow-current')), findsNothing);
         expect(find.byKey(const Key('lyrics-current-line')), findsNothing);
+        expect(find.byKey(const Key('lyrics-earlier')), findsNothing);
+        expect(
+          tester.widget<InkWell>(find.byKey(const Key('lyrics-seek-0'))).onTap,
+          isNull,
+        );
         expect(tester.takeException(), isNull);
       },
       size: const Size(800, 600),
@@ -138,6 +144,212 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+
+  testWidgets('clicking timed lyrics seeks without changing pause or play', (
+    tester,
+  ) async {
+    const source = '[00:00]开头\n[00:10]第二句\n[00:20]第三句';
+    await _withLyrics(tester, source, (fixture) async {
+      await _waitForLyrics(tester);
+      await fixture.player.pause();
+      await tester.pumpAndSettle();
+      final playCalls = fixture.backend.playCalls;
+      final seekRevision = fixture.player.seekRevision;
+      await _tapLyricsControl(tester, 'lyrics-seek-1');
+      expect(fixture.backend.seekPositions.last, const Duration(seconds: 10));
+      expect(fixture.player.position.value, const Duration(seconds: 10));
+      expect(fixture.player.isPlaying.value, isFalse);
+      expect(fixture.backend.playCalls, playCalls);
+      expect(fixture.player.seekRevision, greaterThan(seekRevision));
+      await fixture.player.togglePlayback();
+      await tester.pumpAndSettle();
+      final thirdLine = find.text('第三句');
+      await tester.ensureVisible(thirdLine);
+      Focus.of(tester.element(thirdLine)).requestFocus();
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(fixture.backend.seekPositions.last, const Duration(seconds: 20));
+      expect(fixture.player.isPlaying.value, isTrue);
+      expect(await tester.runAsync(fixture.lyricFile.readAsString), source);
+    });
+  });
+
+  testWidgets('offset display and seeking share LRC offset plus user timing', (
+    tester,
+  ) async {
+    await _withLyrics(
+      tester,
+      '[offset:1000]\n[00:00]开头\n[00:10]第二句\n[00:20]第三句',
+      (fixture) async {
+        await _waitForLyrics(tester);
+        fixture.backend.emitPosition(const Duration(milliseconds: 9000));
+        await tester.pumpAndSettle();
+        expect(_selectedLine(tester, 1), isTrue);
+        await _tapLyricsControl(tester, 'lyrics-later');
+        expect(find.text('歌词延后 0.5 秒'), findsOneWidget);
+        expect(_selectedLine(tester, 0), isTrue);
+        await _tapLyricsControl(tester, 'lyrics-seek-1');
+        expect(
+          fixture.backend.seekPositions.last,
+          const Duration(milliseconds: 9500),
+        );
+        expect(_selectedLine(tester, 1), isTrue);
+        await _tapLyricsControl(tester, 'lyrics-reset-offset');
+        expect(find.text('歌词同步：原始时间'), findsOneWidget);
+        await _tapLyricsControl(tester, 'lyrics-earlier');
+        await _tapLyricsControl(tester, 'lyrics-seek-1');
+        expect(
+          fixture.backend.seekPositions.last,
+          const Duration(milliseconds: 8500),
+        );
+        expect(_selectedLine(tester, 1), isTrue);
+        expect(fixture.controller.lyricsOffsetMilliseconds, -500);
+      },
+    );
+  });
+
+  testWidgets(
+    'timing is bounded, per song and survives page changes only in memory',
+    (tester) async {
+      await _withLyrics(tester, '[00:00]开头\n[00:10]第二句', (fixture) async {
+        await _waitForLyrics(tester);
+        final original = fixture.song;
+        fixture.controller.setLyricsOffset(99999, songId: original.id);
+        await tester.pumpAndSettle();
+        expect(fixture.controller.lyricsOffsetMilliseconds, 30000);
+        expect(
+          tester
+              .widget<TextButton>(find.byKey(const Key('lyrics-later')))
+              .onPressed,
+          isNull,
+        );
+        await fixture.controller.seekToLyricsLine(
+          const Duration(minutes: 10),
+          songId: original.id,
+          selectionRevision: fixture.controller.selectionRevision,
+        );
+        expect(
+          fixture.backend.seekPositions.last,
+          fixture.player.duration.value,
+        );
+        fixture.controller.setLyricsOffset(-99999, songId: original.id);
+        await fixture.controller.seekToLyricsLine(
+          const Duration(seconds: 10),
+          songId: original.id,
+          selectionRevision: fixture.controller.selectionRevision,
+        );
+        expect(fixture.backend.seekPositions.last, Duration.zero);
+        fixture.controller.setLyricsOffset(500, songId: original.id);
+        final other = Song(
+          uri: File('${fixture.directory.path}/other.mp3').uri,
+          fileName: 'other.mp3',
+        );
+        await tester.runAsync(() async {
+          await fixture.player.playQueue([other]);
+          await tester.pump();
+        });
+        expect(fixture.controller.lyricsOffsetMilliseconds, 0);
+        fixture.controller.setLyricsOffset(1500, songId: other.id);
+        await tester.runAsync(() async {
+          await fixture.player.playQueue([original]);
+          await tester.pump();
+        });
+        await _waitForLyrics(tester);
+        expect(fixture.controller.lyricsOffsetMilliseconds, 500);
+        await _tapLyricsControl(tester, 'nav-0');
+        await tester.runAsync(() async {
+          await tester.tap(find.byKey(const Key('nav-1')));
+          await tester.pump();
+        });
+        await _waitForLyrics(tester);
+        expect(find.text('歌词延后 0.5 秒'), findsOneWidget);
+      });
+    },
+  );
+
+  testWidgets(
+    'exit and stale lyric actions cannot seek and canceled exit recovers',
+    (tester) async {
+      await _withLyrics(tester, '[00:00]开头\n[00:10]第二句', (fixture) async {
+        await _waitForLyrics(tester);
+        final oldAction = tester
+            .widget<InkWell>(find.byKey(const Key('lyrics-seek-1')))
+            .onTap!;
+        final oldRevision = fixture.controller.selectionRevision;
+        final initialSeeks = fixture.backend.seekPositions.length;
+        fixture.controller.beginExit();
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<InkWell>(find.byKey(const Key('lyrics-seek-1'))).onTap,
+          isNull,
+        );
+        oldAction();
+        fixture.controller.setLyricsOffset(500, songId: fixture.song.id);
+        await tester.pumpAndSettle();
+        expect(fixture.backend.seekPositions.length, initialSeeks);
+        expect(fixture.controller.lyricsOffsetMilliseconds, 0);
+        fixture.controller.cancelExit();
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<InkWell>(find.byKey(const Key('lyrics-seek-1'))).onTap,
+          isNotNull,
+        );
+        await _tapLyricsControl(tester, 'lyrics-seek-1');
+        expect(fixture.backend.seekPositions.length, initialSeeks + 1);
+        await fixture.player.playQueue([fixture.song]);
+        await fixture.controller.seekToLyricsLine(
+          const Duration(seconds: 20),
+          songId: fixture.song.id,
+          selectionRevision: oldRevision,
+        );
+        expect(fixture.backend.seekPositions.length, initialSeeks + 1);
+      });
+    },
+  );
+
+  testWidgets('unknown duration disables lyric seeking', (tester) async {
+    await _withLyrics(tester, '[00:00]开头\n[00:10]第二句', (fixture) async {
+      await _waitForLyrics(tester);
+      fixture.backend.emitDuration(Duration.zero);
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<InkWell>(find.byKey(const Key('lyrics-seek-1'))).onTap,
+        isNull,
+      );
+      expect(fixture.controller.canSeekLyrics, isFalse);
+    });
+  });
+
+  testWidgets('timed lyric controls wrap at compact width and large text', (
+    tester,
+  ) async {
+    await _withLyrics(
+      tester,
+      '[00:00]第一句歌词\n[00:10]第二句歌词',
+      (fixture) async {
+        await _waitForLyrics(tester);
+        await _tapLyricsControl(tester, 'lyrics-later');
+        expect(find.text('歌词延后 0.5 秒'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      },
+      size: const Size(800, 600),
+      textScale: 2,
+    );
+  });
+}
+
+bool _selectedLine(WidgetTester tester, int index) => tester
+    .widget<Semantics>(find.byKey(Key('lyrics-line-$index')))
+    .properties
+    .selected!;
+
+Future<void> _tapLyricsControl(WidgetTester tester, String key) async {
+  final finder = find.byKey(Key(key));
+  await tester.ensureVisible(finder);
+  await tester.pumpAndSettle();
+  await tester.tap(finder);
+  await tester.pumpAndSettle();
 }
 
 ScrollPosition _lyricsScroll(WidgetTester tester) => tester

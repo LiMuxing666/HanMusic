@@ -2,18 +2,31 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:charset/charset.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path/path.dart' as path;
 
 import '../models/playlist.dart';
 import '../models/song.dart';
+import 'local_library_repository.dart';
+
+enum PlaylistTransferFormat { hanmusicJson, m3u8 }
 
 /// A portable metadata snapshot; never contains playable HTTP URLs or audio.
 class PlaylistTransferDocument {
-  const PlaylistTransferDocument({required this.name, required this.songs});
+  const PlaylistTransferDocument({
+    required this.name,
+    required this.songs,
+    this.formatLabel = 'HanMusic JSON',
+    this.skippedCount = 0,
+    this.duplicateCount = 0,
+  });
 
   final String name;
   final List<Song> songs;
+  final String formatLabel;
+  final int skippedCount;
+  final int duplicateCount;
 }
 
 class PlaylistTransferCodec {
@@ -22,6 +35,8 @@ class PlaylistTransferCodec {
   static const maxFileBytes = 4 * 1024 * 1024;
   static const maxSongs = 5000;
   static const extension = '.hanmusic.json';
+  static const m3u8Extension = '.m3u8';
+  static const maxTextLines = 20000;
   static const _songKeys = {
     'uri',
     'fileName',
@@ -34,7 +49,14 @@ class PlaylistTransferCodec {
     'trackId',
   };
 
-  static List<int> encode({required String name, required List<Song> songs}) {
+  static List<int> encode({
+    required String name,
+    required List<Song> songs,
+    PlaylistTransferFormat outputFormat = PlaylistTransferFormat.hanmusicJson,
+  }) {
+    if (outputFormat == PlaylistTransferFormat.m3u8) {
+      return _encodeM3u8(name, songs);
+    }
     final document = _validate(name, songs);
     final bytes = utf8.encode(
       const JsonEncoder.withIndent('  ').convert({
@@ -52,9 +74,25 @@ class PlaylistTransferCodec {
     return bytes;
   }
 
-  static PlaylistTransferDocument decode(List<int> bytes) {
+  static PlaylistTransferDocument decode(
+    List<int> bytes, {
+    String? sourcePath,
+  }) {
     if (bytes.isEmpty || bytes.length > maxFileBytes) {
-      throw const FormatException('请选择不超过 4 MB 的 HanMusic 歌单文件。');
+      throw const FormatException('请选择不超过 4 MB 的 JSON、M3U 或 M3U8 歌单文件。');
+    }
+    if (sourcePath != null) {
+      final suffix = path.windows.extension(sourcePath).toLowerCase();
+      if (suffix == '.m3u' || suffix == m3u8Extension) {
+        return _decodeM3u(
+          bytes,
+          sourcePath,
+          strictUtf8: suffix == m3u8Extension,
+        );
+      }
+      if (suffix != '.json') {
+        throw const FormatException('请选择 JSON、M3U 或 M3U8 歌单文件。');
+      }
     }
     dynamic value;
     try {
@@ -98,6 +136,205 @@ class PlaylistTransferCodec {
       }
     }
     return _validate(playlist['name'] as String, songs);
+  }
+
+  static PlaylistTransferDocument _decodeM3u(
+    List<int> bytes,
+    String sourcePath, {
+    required bool strictUtf8,
+  }) {
+    if (bytes.length >= 2 &&
+        ((bytes[0] == 0xff && bytes[1] == 0xfe) ||
+            (bytes[0] == 0xfe && bytes[1] == 0xff))) {
+      throw const FormatException('歌单不支持 UTF-16，请另存为 UTF-8 M3U8。');
+    }
+    String text;
+    var encoding = 'UTF-8';
+    try {
+      text = utf8.decode(bytes, allowMalformed: false);
+    } on FormatException {
+      if (strictUtf8 ||
+          (bytes.length >= 3 &&
+              bytes[0] == 0xef &&
+              bytes[1] == 0xbb &&
+              bytes[2] == 0xbf)) {
+        throw const FormatException('M3U8 必须使用 UTF-8 编码，请重新选择。');
+      }
+      try {
+        text = gbk.decode(bytes, allowMalformed: false);
+        encoding = 'GBK';
+      } on FormatException {
+        throw const FormatException('M3U 不是有效的 UTF-8 或 GBK 文本。');
+      }
+    }
+    if (text.startsWith('\uFEFF')) text = text.substring(1);
+    if (RegExp(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]').hasMatch(text)) {
+      throw const FormatException('歌单含有不支持的控制字符。');
+    }
+    final songs = <Song>[];
+    final ids = <String>{};
+    var skipped = 0, duplicates = 0, entries = 0, lines = 0;
+    String? title;
+    Duration? duration;
+    for (final rawLine in LineSplitter.split(text)) {
+      if (++lines > maxTextLines || rawLine.length > 4096) {
+        throw const FormatException('歌单行数或单行长度超出限制。');
+      }
+      final line = rawLine.trim();
+      if (line.isEmpty) continue;
+      if (line.toUpperCase().startsWith('#EXT-X-')) {
+        throw const FormatException('暂不支持 HLS 网络流清单，请选择本地音频歌单。');
+      }
+      if (line.startsWith('#')) {
+        if (line.toUpperCase().startsWith('#EXTINF:')) {
+          title = null;
+          duration = null;
+          final comma = line.indexOf(',');
+          if (comma >= 0) {
+            final label = line.substring(comma + 1).trim();
+            if (label.isNotEmpty) title = label;
+            final seconds = double.tryParse(line.substring(8, comma).trim());
+            if (seconds != null &&
+                seconds.isFinite &&
+                seconds >= 0 &&
+                seconds <= const Duration(days: 365).inSeconds) {
+              duration = Duration(milliseconds: (seconds * 1000).round());
+            }
+          }
+        }
+        continue;
+      }
+      if (++entries > maxSongs) {
+        throw const FormatException('单个歌单最多读取 5000 条歌曲路径。');
+      }
+      final uri = _m3uLocalUri(line, sourcePath: sourcePath);
+      if (uri == null) {
+        skipped++;
+      } else {
+        final song = _checkedSong(
+          Song(
+            uri: uri,
+            fileName: path.windows.basename(uri.toFilePath(windows: true)),
+            trackTitle: title,
+            duration: duration,
+            isMissing: true,
+          ),
+        );
+        if (ids.add(song.id)) {
+          songs.add(song);
+        } else {
+          duplicates++;
+        }
+      }
+      // Metadata applies only to its next entry, including a skipped entry.
+      title = null;
+      duration = null;
+    }
+    if (songs.isEmpty) {
+      throw FormatException('未找到可导入的本地音频，已跳过 $skipped 条不支持的路径。');
+    }
+    var name = path.windows.basenameWithoutExtension(sourcePath).trim();
+    name = String.fromCharCodes(name.runes.take(100));
+    if (name.isEmpty) name = '导入的歌单';
+    return PlaylistTransferDocument(
+      name: Playlist.validateName(name),
+      songs: List.unmodifiable(songs),
+      formatLabel: '${strictUtf8 ? 'M3U8' : 'M3U'} · $encoding',
+      skippedCount: skipped,
+      duplicateCount: duplicates,
+    );
+  }
+
+  /// Accept only drive-qualified local audio, resolving ordinary relative
+  /// paths against the selected playlist. No network/UNC/device stat is made.
+  static Uri? _m3uLocalUri(String value, {String? sourcePath}) {
+    try {
+      var text = value.trim();
+      if (text.startsWith('"') && text.endsWith('"') && text.length >= 2) {
+        text = text.substring(1, text.length - 1);
+      }
+      if (RegExp(r'[\x00-\x1f\x7f<>"|?*]').hasMatch(text)) return null;
+      if (text.toLowerCase().startsWith('file:')) {
+        final uri = Uri.tryParse(text);
+        if (uri == null ||
+            uri.host.isNotEmpty ||
+            uri.hasQuery ||
+            uri.hasFragment ||
+            uri.userInfo.isNotEmpty) {
+          return null;
+        }
+        text = uri.toFilePath(windows: true);
+      } else if (!RegExp(r'^[a-zA-Z]:[\\/]').hasMatch(text)) {
+        if (text.contains(':') ||
+            text.startsWith('/') ||
+            text.startsWith(r'\')) {
+          return null;
+        }
+        if (sourcePath == null ||
+            !RegExp(r'^[a-zA-Z]:[\\/]').hasMatch(sourcePath)) {
+          return null;
+        }
+        text = path.windows.join(path.windows.dirname(sourcePath), text);
+      }
+      text = path.windows.normalize(text);
+      if (!RegExp(r'^[a-zA-Z]:[\\/]').hasMatch(text) ||
+          text.substring(2).contains(':') ||
+          RegExp(r'[\x00-\x1f\x7f<>"|?*]').hasMatch(text) ||
+          !LocalLibraryRepository.supportedExtensions.contains(
+            path.windows.extension(text).toLowerCase(),
+          )) {
+        return null;
+      }
+      for (final component in path.windows.split(text).skip(1)) {
+        if (component.endsWith('.') ||
+            component.endsWith(' ') ||
+            RegExp(
+              r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)',
+              caseSensitive: false,
+            ).hasMatch(component)) {
+          return null;
+        }
+      }
+      return Uri.file(text, windows: true);
+    } on FormatException {
+      return null;
+    } on UnsupportedError {
+      return null;
+    } on ArgumentError {
+      return null;
+    }
+  }
+
+  static bool canExportM3u8(Song song) =>
+      !song.isOnline &&
+      song.uri.scheme == 'file' &&
+      _m3uLocalUri(song.uri.toString()) != null;
+
+  static List<int> _encodeM3u8(String name, List<Song> songs) {
+    final document = _validate(name, songs);
+    final local = document.songs.where(canExportM3u8).toList(growable: false);
+    if (local.isEmpty) {
+      throw const FormatException('没有可导出的本地音频，请使用 JSON 保存完整歌单。');
+    }
+    final text = StringBuffer('#EXTM3U\r\n');
+    for (final song in local) {
+      final duration = song.duration == null
+          ? '-1'
+          : (song.duration!.inMilliseconds / 1000).toString();
+      final metadata = '#EXTINF:$duration,${song.title}';
+      if (metadata.length > 4096) {
+        throw const FormatException('歌曲标题过长，无法写入 M3U8，请使用 JSON 导出。');
+      }
+      text.writeln('$metadata\r');
+      text.writeln(
+        '${_m3uLocalUri(song.uri.toString())!.toFilePath(windows: true)}\r',
+      );
+    }
+    final bytes = utf8.encode(text.toString());
+    if (bytes.length > maxFileBytes) {
+      throw const FormatException('歌单文件超过 4 MB，请减少歌曲后重试。');
+    }
+    return bytes;
   }
 
   static bool _exactKeys(Map<String, dynamic> value, Set<String> keys) =>
@@ -157,11 +394,17 @@ class PlaylistTransferCodec {
     }
   }
 
-  static String suggestedFileName(String name) {
+  static String suggestedFileName(
+    String name, {
+    PlaylistTransferFormat outputFormat = PlaylistTransferFormat.hanmusicJson,
+  }) {
     final safe = Playlist.validateName(name)
         .replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')
         .replaceAll(RegExp(r'[. ]+$'), '');
-    return 'HanMusic-${String.fromCharCodes(safe.runes.take(70))}$extension';
+    final suffix = outputFormat == PlaylistTransferFormat.m3u8
+        ? m3u8Extension
+        : extension;
+    return 'HanMusic-${String.fromCharCodes(safe.runes.take(70))}$suffix';
   }
 }
 
@@ -190,10 +433,10 @@ class LocalPlaylistTransferFiles implements PlaylistTransferFiles {
 
   @override
   Future<String?> pickImport() async => (await FilePicker.pickFile(
-    dialogTitle: '导入 HanMusic JSON 歌单',
+    dialogTitle: '导入 JSON / M3U / M3U8 歌单',
     windowsOptions: _options,
     type: FileType.custom,
-    allowedExtensions: ['json'],
+    allowedExtensions: ['json', 'm3u', 'm3u8'],
   ))?.path;
 
   @override
@@ -243,8 +486,11 @@ class LocalPlaylistTransferFiles implements PlaylistTransferFiles {
       if (!canCommit()) throw const PlaylistTransferCanceled();
       // Reserve a NEW destination atomically. rename may replace files, so it
       // may only replace the empty placeholder exclusively created by this call.
-      final extension = PlaylistTransferCodec.extension;
-      final base = filePath.endsWith(extension)
+      final extension =
+          filePath.toLowerCase().endsWith(PlaylistTransferCodec.m3u8Extension)
+          ? PlaylistTransferCodec.m3u8Extension
+          : PlaylistTransferCodec.extension;
+      final base = filePath.toLowerCase().endsWith(extension)
           ? filePath.substring(0, filePath.length - extension.length)
           : filePath;
       for (var index = 1; index <= 10000; index++) {
@@ -312,7 +558,7 @@ class PlaylistTransfer {
         .read(selected, PlaylistTransferCodec.maxFileBytes)
         .timeout(ioTimeout);
     if (!canCommit()) return null;
-    final document = PlaylistTransferCodec.decode(bytes);
+    final document = PlaylistTransferCodec.decode(bytes, sourcePath: selected);
     if (!canCommit()) return null;
     return _probeLocalFiles(document, canCommit);
   }
@@ -374,6 +620,9 @@ class PlaylistTransfer {
         ? PlaylistTransferDocument(
             name: document.name,
             songs: List.unmodifiable(checked),
+            formatLabel: document.formatLabel,
+            skippedCount: document.skippedCount,
+            duplicateCount: document.duplicateCount,
           )
         : null;
   }
@@ -382,11 +631,16 @@ class PlaylistTransfer {
     required String name,
     required List<Song> songs,
     required bool Function() canCommit,
+    PlaylistTransferFormat outputFormat = PlaylistTransferFormat.hanmusicJson,
   }) async {
     if (!canCommit()) return null;
-    final bytes = PlaylistTransferCodec.encode(name: name, songs: songs);
+    final bytes = PlaylistTransferCodec.encode(
+      name: name,
+      songs: songs,
+      outputFormat: outputFormat,
+    );
     final selected = await files.pickExport(
-      PlaylistTransferCodec.suggestedFileName(name),
+      PlaylistTransferCodec.suggestedFileName(name, outputFormat: outputFormat),
     );
     if (selected == null || !canCommit()) return null;
     var pending = true;

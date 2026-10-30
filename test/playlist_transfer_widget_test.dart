@@ -52,6 +52,12 @@ void main() {
         fixture.controller.toggleFavorite(_local);
         await tester.pumpAndSettle();
         await _tap(tester, 'playlist-import');
+        expect(
+          find.byKey(const Key('playlist-import-preview')),
+          findsOneWidget,
+        );
+        expect(fixture.controller.playlists.playlists.length, 2);
+        await _tap(tester, 'playlist-import-confirm');
         final imported = fixture.controller.playlists.playlists.last;
         expect(imported.name, '旅行 (2)');
         expect(imported.id, isNot(existing.id));
@@ -163,6 +169,7 @@ void main() {
         for (final key in [
           'playlist-import',
           'playlist-export',
+          'playlist-export-m3u8',
           'playlist-create',
         ]) {
           expect(
@@ -187,6 +194,7 @@ void main() {
         expect(find.byKey(const Key('playlist-transfer-busy')), findsNothing);
         fixture.files.importGate = null;
         await _tap(tester, 'playlist-import');
+        await _tap(tester, 'playlist-import-confirm');
         expect(fixture.controller.playlists.playlists.length, 2);
       });
     },
@@ -264,6 +272,162 @@ void main() {
       });
     },
   );
+
+  testWidgets(
+    'M3U preview reports skipped duplicate and missing entries before any mutation',
+    (tester) async {
+      await _withPlayer(tester, (fixture) async {
+        fixture.files.importPath = 'D:/lists/旅行.m3u8';
+        fixture.files.importBytes = utf8.encode(
+          '#EXTM3U\n'
+          r'..\library\known.mp3'
+          '\n'
+          'D:/another/missing.flac\nD:/LIBRARY/KNOWN.MP3\n'
+          'https://example.invalid/remote.mp3\nnested.m3u8\n',
+        );
+        final before = fixture.snapshot;
+        await _tap(tester, 'playlist-import');
+        expect(
+          find.byKey(const Key('playlist-import-preview')),
+          findsOneWidget,
+        );
+        expect(find.text('格式：M3U8 · UTF-8'), findsOneWidget);
+        expect(find.textContaining('已合并 1 条重复路径'), findsOneWidget);
+        expect(find.textContaining('已跳过 2 条网络地址'), findsOneWidget);
+        expect(find.textContaining('缺失 2 首'), findsOneWidget);
+        expect(fixture.snapshot, before);
+        expect(fixture.player.queue, isEmpty);
+        await _tap(tester, 'playlist-import-cancel');
+        expect(fixture.snapshot, before);
+        await _tap(tester, 'playlist-import');
+        await _tap(tester, 'playlist-import-confirm');
+        final imported = fixture.controller.playlists.playlists.last;
+        expect(imported.name, '旅行');
+        expect(imported.songs.map((song) => song.id), [
+          _local.id,
+          Uri.file(
+            'D:/another/missing.flac',
+            windows: true,
+          ).toString().toLowerCase(),
+        ]);
+        expect(imported.songs.last.isMissing, isTrue);
+        expect(fixture.library.songs.map((song) => song.id), [_local.id]);
+        expect(fixture.files.probed.length, 4);
+        expect(
+          fixture.files.probed.every((uri) => uri.scheme == 'file'),
+          isTrue,
+        );
+        expect(fixture.player.queue, isEmpty);
+        expect(tester.takeException(), isNull);
+      });
+    },
+  );
+
+  testWidgets(
+    'exit-cancel while preview is open invalidates its later confirmation',
+    (tester) async {
+      await _withPlayer(tester, (fixture) async {
+        final before = fixture.snapshot;
+        await _tap(tester, 'playlist-import');
+        expect(
+          find.byKey(const Key('playlist-import-preview')),
+          findsOneWidget,
+        );
+        fixture.controller.beginExit();
+        fixture.controller.cancelExit();
+        await _tap(tester, 'playlist-import-confirm');
+        expect(fixture.snapshot, before);
+        expect(find.textContaining('已导入'), findsNothing);
+        expect(find.byKey(const Key('playlist-transfer-busy')), findsNothing);
+      });
+    },
+  );
+
+  testWidgets(
+    'mixed M3U8 export asks before filtering online songs and keeps local paths',
+    (tester) async {
+      await _withPlayer(tester, (fixture) async {
+        fixture.controller.addSongsToPlaylist(Playlist.favoritesId, [
+          _local,
+          _online,
+        ]);
+        fixture.files.exportPath = 'D:/exports/list.m3u8';
+        await tester.pumpAndSettle();
+        await _tap(tester, 'playlist-export-m3u8');
+        expect(find.textContaining('跳过 1 首在线歌曲'), findsOneWidget);
+        expect(fixture.files.writes, 0);
+        await _tap(tester, 'playlist-export-cancel');
+        expect(fixture.files.writes, 0);
+        await _tap(tester, 'playlist-export-m3u8');
+        await _tap(tester, 'playlist-export-confirm');
+        expect(fixture.files.suggestedName, 'HanMusic-我喜欢.m3u8');
+        final document = PlaylistTransferCodec.decode(
+          fixture.files.savedBytes!,
+          sourcePath: 'D:/exports/list.m3u8',
+        );
+        expect(document.songs.map((song) => song.id), [_local.id]);
+        expect(fixture.files.commits, 1);
+        expect(find.textContaining('已跳过 1 条'), findsOneWidget);
+        expect(fixture.controller.playlists.playlists.single.songs.length, 2);
+        expect(fixture.player.queue, isEmpty);
+        expect(tester.takeException(), isNull);
+      });
+    },
+  );
+
+  testWidgets(
+    'online-only M3U8 export does not open a picker or write a file',
+    (tester) async {
+      await _withPlayer(tester, (fixture) async {
+        fixture.controller.addSongsToPlaylist(Playlist.favoritesId, [_online]);
+        await tester.pumpAndSettle();
+        await _tap(tester, 'playlist-export-m3u8');
+        expect(find.textContaining('没有可导出的本地音频'), findsOneWidget);
+        expect(fixture.files.suggestedName, isNull);
+        expect(fixture.files.writes, 0);
+      });
+    },
+  );
+
+  testWidgets(
+    'exit-cancel in the mixed export confirmation prevents its late write',
+    (tester) async {
+      await _withPlayer(tester, (fixture) async {
+        fixture.controller.addSongsToPlaylist(Playlist.favoritesId, [
+          _local,
+          _online,
+        ]);
+        await tester.pumpAndSettle();
+        await _tap(tester, 'playlist-export-m3u8');
+        fixture.controller.beginExit();
+        fixture.controller.cancelExit();
+        await _tap(tester, 'playlist-export-confirm');
+        expect(fixture.files.suggestedName, isNull);
+        expect(fixture.files.writes, 0);
+        expect(find.textContaining('已导出到'), findsNothing);
+      });
+    },
+  );
+
+  testWidgets('import preview stays usable at compact 200 percent scale', (
+    tester,
+  ) async {
+    await _withPlayer(
+      tester,
+      (fixture) async {
+        await _tap(tester, 'playlist-import');
+        expect(
+          find.byKey(const Key('playlist-import-preview')),
+          findsOneWidget,
+        );
+        await _tap(tester, 'playlist-import-cancel');
+        expect(fixture.controller.playlists.playlists.length, 1);
+        expect(tester.takeException(), isNull);
+      },
+      size: const Size(800, 600),
+      scale: 2,
+    );
+  });
 
   testWidgets(
     'transfer actions remain reachable in compact 200 percent layout',
