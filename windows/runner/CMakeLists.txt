@@ -21,6 +21,10 @@ add_executable(${BINARY_NAME} WIN32
 # Apply the standard set of build settings. This can be removed for applications
 # that need different build settings.
 apply_standard_settings(${BINARY_NAME})
+# C++/WinRT selects <coroutine> in C++20 mode. The newer MSVC toolchain no
+# longer accepts its C++17 <experimental/coroutine> fallback (STL1011).
+# Keep this local to the app target so plugin build settings stay unchanged.
+target_compile_features(${BINARY_NAME} PRIVATE cxx_std_20)
 # C++/WinRT exceptions are contained at the bridge's channel/window boundaries.
 target_compile_options(${BINARY_NAME} PRIVATE /utf-8)
 
